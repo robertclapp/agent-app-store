@@ -1,0 +1,528 @@
+{
+  "$schema": "https://agentappstore.dev/schema/v1/registry.json",
+  "registry": {
+    "name": "Agent App Store",
+    "version": "1.0.0",
+    "description": "A protocol-agnostic registry of agentic tools, APIs, and MCP servers that AI agents can query to discover capabilities for completing tasks.",
+    "updated": "2026-04-10T22:25:00Z",
+    "spec_version": "0.1.0",
+    "total_tools": 18,
+    "categories": [
+      "search-and-data",
+      "developer-tools",
+      "productivity",
+      "communication",
+      "data-and-analytics",
+      "infrastructure",
+      "design",
+      "ai-and-ml",
+      "security"
+    ]
+  },
+  "tools": [
+    {
+      "id": "perplexity-sonar",
+      "name": "Perplexity Sonar API",
+      "slug": "perplexity-sonar",
+      "tagline": "Real-time web search with citations, built for agents",
+      "description": "Perplexity's Sonar API provides LLM-powered web search with inline citations. Agents can query for current events, research, facts, and get grounded answers with source URLs. Supports streaming responses, search filters, and domain restrictions.",
+      "category": "search-and-data",
+      "protocol": "REST API",
+      "auth": {
+        "type": "api_key",
+        "header": "Authorization",
+        "prefix": "Bearer"
+      },
+      "pricing": {
+        "model": "per-request",
+        "free_tier": true,
+        "details": "1000 free requests/month; then $5/1000 requests"
+      },
+      "endpoints": {
+        "base_url": "https://api.perplexity.ai",
+        "docs": "https://docs.perplexity.ai"
+      },
+      "capabilities": ["web-search", "citations", "real-time-data", "streaming"],
+      "tags": ["search", "research", "citations", "real-time", "web"],
+      "popularity": 95,
+      "verified": true,
+      "logo_icon": "search",
+      "accent_color": "#20B2AA"
+    },
+    {
+      "id": "brave-search-api",
+      "name": "Brave Search API",
+      "slug": "brave-search",
+      "tagline": "Independent web search index, privacy-first",
+      "description": "Brave Search provides an independent search index (not proxied from Google/Bing). Agents get web results, news, images, and videos via a simple REST API. Great for agents that need unbiased, diverse search results with full snippets.",
+      "category": "search-and-data",
+      "protocol": "REST API",
+      "auth": {
+        "type": "api_key",
+        "header": "X-Subscription-Token"
+      },
+      "pricing": {
+        "model": "per-request",
+        "free_tier": true,
+        "details": "2000 free queries/month; paid plans from $3/1000"
+      },
+      "endpoints": {
+        "base_url": "https://api.search.brave.com/res/v1",
+        "docs": "https://brave.com/search/api/"
+      },
+      "capabilities": ["web-search", "news-search", "image-search", "video-search"],
+      "tags": ["search", "web", "news", "images", "privacy"],
+      "popularity": 88,
+      "verified": true,
+      "logo_icon": "shield",
+      "accent_color": "#FB542B"
+    },
+    {
+      "id": "github-mcp",
+      "name": "GitHub MCP Server",
+      "slug": "github-mcp",
+      "tagline": "Full GitHub access — repos, issues, PRs, actions",
+      "description": "The official GitHub MCP server gives agents full access to GitHub's API through the Model Context Protocol. Create repos, manage issues, review pull requests, trigger Actions workflows, search code, and manage branches — all through structured MCP tool calls.",
+      "category": "developer-tools",
+      "protocol": "MCP",
+      "auth": {
+        "type": "oauth2",
+        "scopes": ["repo", "read:org", "workflow"]
+      },
+      "pricing": {
+        "model": "free",
+        "free_tier": true,
+        "details": "Free with GitHub account; rate limits apply"
+      },
+      "endpoints": {
+        "package": "npm:@modelcontextprotocol/server-github",
+        "docs": "https://github.com/modelcontextprotocol/servers/tree/main/src/github"
+      },
+      "capabilities": ["repo-management", "issue-tracking", "pr-review", "code-search", "actions"],
+      "tags": ["github", "git", "code", "devops", "ci-cd"],
+      "popularity": 97,
+      "verified": true,
+      "logo_icon": "github",
+      "accent_color": "#333333"
+    },
+    {
+      "id": "notion-mcp",
+      "name": "Notion MCP Server",
+      "slug": "notion-mcp",
+      "tagline": "Read and write Notion pages, databases, and blocks",
+      "description": "The Notion MCP server exposes optimized tools for LLMs to interact with Notion workspaces. Agents can search pages, read content, create new pages, update databases, and manage blocks. Designed specifically for agent workflows with structured tool schemas.",
+      "category": "productivity",
+      "protocol": "MCP",
+      "auth": {
+        "type": "oauth2",
+        "scopes": ["read_content", "update_content", "insert_content"]
+      },
+      "pricing": {
+        "model": "free",
+        "free_tier": true,
+        "details": "Free with Notion account"
+      },
+      "endpoints": {
+        "package": "npm:@notionhq/notion-mcp-server",
+        "docs": "https://developers.notion.com/docs/mcp"
+      },
+      "capabilities": ["page-management", "database-query", "content-creation", "search"],
+      "tags": ["notion", "notes", "wiki", "database", "productivity"],
+      "popularity": 92,
+      "verified": true,
+      "logo_icon": "book-open",
+      "accent_color": "#000000"
+    },
+    {
+      "id": "slack-mcp",
+      "name": "Slack MCP Server",
+      "slug": "slack-mcp",
+      "tagline": "Send messages, search channels, manage Slack workflows",
+      "description": "Agents can send messages, search conversations, list channels, manage reactions, and interact with Slack workspaces through the MCP protocol. Supports both reading and writing operations with proper scoping.",
+      "category": "communication",
+      "protocol": "MCP",
+      "auth": {
+        "type": "oauth2",
+        "scopes": ["channels:read", "chat:write", "search:read"]
+      },
+      "pricing": {
+        "model": "free",
+        "free_tier": true,
+        "details": "Free with Slack workspace"
+      },
+      "endpoints": {
+        "package": "npm:@modelcontextprotocol/server-slack",
+        "docs": "https://github.com/modelcontextprotocol/servers/tree/main/src/slack"
+      },
+      "capabilities": ["messaging", "channel-management", "search", "reactions"],
+      "tags": ["slack", "messaging", "team", "communication", "chat"],
+      "popularity": 89,
+      "verified": true,
+      "logo_icon": "message-square",
+      "accent_color": "#4A154B"
+    },
+    {
+      "id": "playwright-mcp",
+      "name": "Playwright MCP Server",
+      "slug": "playwright-mcp",
+      "tagline": "Browser automation — navigate, click, extract, screenshot",
+      "description": "The Playwright MCP server gives agents full browser automation capabilities. Navigate pages, fill forms, click elements, extract structured data, take screenshots, and handle multi-step web workflows. The most popular MCP server globally.",
+      "category": "developer-tools",
+      "protocol": "MCP",
+      "auth": {
+        "type": "none"
+      },
+      "pricing": {
+        "model": "free",
+        "free_tier": true,
+        "details": "Open source, self-hosted"
+      },
+      "endpoints": {
+        "package": "npm:@playwright/mcp",
+        "docs": "https://github.com/microsoft/playwright-mcp"
+      },
+      "capabilities": ["browser-automation", "web-scraping", "screenshots", "form-filling", "testing"],
+      "tags": ["browser", "automation", "testing", "web", "screenshots"],
+      "popularity": 99,
+      "verified": true,
+      "logo_icon": "monitor",
+      "accent_color": "#2EAD33"
+    },
+    {
+      "id": "firecrawl-mcp",
+      "name": "Firecrawl MCP Server",
+      "slug": "firecrawl-mcp",
+      "tagline": "Turn any website into clean, LLM-ready data",
+      "description": "Firecrawl converts websites into clean, structured content optimized for LLMs. Strips navigation, ads, and boilerplate, returning just the content. Supports single-page extraction, full site crawling, and structured data extraction with schemas.",
+      "category": "data-and-analytics",
+      "protocol": "MCP",
+      "auth": {
+        "type": "api_key",
+        "env_var": "FIRECRAWL_API_KEY"
+      },
+      "pricing": {
+        "model": "per-request",
+        "free_tier": true,
+        "details": "500 free pages/month; paid from $19/month"
+      },
+      "endpoints": {
+        "package": "npm:firecrawl-mcp",
+        "docs": "https://docs.firecrawl.dev/mcp"
+      },
+      "capabilities": ["web-extraction", "site-crawling", "structured-data", "markdown-conversion"],
+      "tags": ["scraping", "extraction", "content", "markdown", "data"],
+      "popularity": 86,
+      "verified": true,
+      "logo_icon": "flame",
+      "accent_color": "#FF6600"
+    },
+    {
+      "id": "composio-mcp",
+      "name": "Composio MCP Server",
+      "slug": "composio-mcp",
+      "tagline": "One server, 250+ integrations — GitHub, Slack, Gmail, Jira, and more",
+      "description": "Instead of installing separate MCP servers for each service, Composio provides a single gateway to 250+ platforms. Connect GitHub, Slack, Gmail, Notion, Jira, Salesforce, HubSpot, and hundreds more through one unified MCP server. Authentication is managed centrally.",
+      "category": "productivity",
+      "protocol": "MCP",
+      "auth": {
+        "type": "api_key",
+        "env_var": "COMPOSIO_API_KEY"
+      },
+      "pricing": {
+        "model": "freemium",
+        "free_tier": true,
+        "details": "Free tier with limits; Pro from $29/month"
+      },
+      "endpoints": {
+        "package": "npm:composio-core",
+        "docs": "https://docs.composio.dev"
+      },
+      "capabilities": ["multi-platform", "unified-auth", "250+-integrations", "workflow-automation"],
+      "tags": ["integration", "automation", "multi-platform", "gateway", "unified"],
+      "popularity": 84,
+      "verified": true,
+      "logo_icon": "layers",
+      "accent_color": "#6366F1"
+    },
+    {
+      "id": "terraform-mcp",
+      "name": "Terraform MCP Server",
+      "slug": "terraform-mcp",
+      "tagline": "Infrastructure as code management through MCP",
+      "description": "HashiCorp's official Terraform MCP server brings infrastructure-as-code management into agent workflows. Plan, apply, and manage Terraform configurations. Query state, inspect resources, and automate infrastructure changes through structured tool calls.",
+      "category": "infrastructure",
+      "protocol": "MCP",
+      "auth": {
+        "type": "api_key",
+        "env_var": "TFC_TOKEN"
+      },
+      "pricing": {
+        "model": "free",
+        "free_tier": true,
+        "details": "Free with Terraform Cloud account"
+      },
+      "endpoints": {
+        "package": "npm:@hashicorp/terraform-mcp-server",
+        "docs": "https://github.com/hashicorp/terraform-mcp-server"
+      },
+      "capabilities": ["infrastructure-management", "state-inspection", "plan-apply", "resource-query"],
+      "tags": ["terraform", "infrastructure", "iac", "cloud", "devops"],
+      "popularity": 78,
+      "verified": true,
+      "logo_icon": "server",
+      "accent_color": "#7B42BC"
+    },
+    {
+      "id": "datadog-mcp",
+      "name": "Datadog MCP Server",
+      "slug": "datadog-mcp",
+      "tagline": "Query metrics, logs, and traces from your observability stack",
+      "description": "Connect agents to your Datadog observability stack. Query metrics, search logs, inspect traces, manage dashboards, and investigate incidents. Agents can proactively monitor infrastructure health and diagnose issues.",
+      "category": "infrastructure",
+      "protocol": "MCP",
+      "auth": {
+        "type": "api_key",
+        "env_var": "DD_API_KEY"
+      },
+      "pricing": {
+        "model": "free",
+        "free_tier": true,
+        "details": "Free with Datadog account"
+      },
+      "endpoints": {
+        "package": "npm:@datadog/mcp-server",
+        "docs": "https://docs.datadoghq.com/mcp"
+      },
+      "capabilities": ["metrics-query", "log-search", "trace-inspection", "dashboard-management"],
+      "tags": ["monitoring", "observability", "metrics", "logs", "traces"],
+      "popularity": 75,
+      "verified": true,
+      "logo_icon": "activity",
+      "accent_color": "#632CA6"
+    },
+    {
+      "id": "figma-mcp",
+      "name": "Figma MCP Server",
+      "slug": "figma-mcp",
+      "tagline": "Read Figma designs, extract tokens, generate code",
+      "description": "Agents can inspect Figma files, extract design tokens, read component properties, and generate code from designs. Bridge the gap between design and development by letting agents understand your design system directly.",
+      "category": "design",
+      "protocol": "MCP",
+      "auth": {
+        "type": "api_key",
+        "env_var": "FIGMA_ACCESS_TOKEN"
+      },
+      "pricing": {
+        "model": "free",
+        "free_tier": true,
+        "details": "Free with Figma account"
+      },
+      "endpoints": {
+        "package": "npm:@anthropic/figma-mcp",
+        "docs": "https://github.com/anthropics/figma-mcp"
+      },
+      "capabilities": ["design-inspection", "token-extraction", "code-generation", "component-reading"],
+      "tags": ["figma", "design", "ui", "tokens", "code-gen"],
+      "popularity": 82,
+      "verified": true,
+      "logo_icon": "pen-tool",
+      "accent_color": "#F24E1E"
+    },
+    {
+      "id": "google-workspace-mcp",
+      "name": "Google Workspace MCP Server",
+      "slug": "google-workspace-mcp",
+      "tagline": "Gmail, Drive, Calendar, Docs — all through MCP",
+      "description": "Access Google Workspace services through MCP. Read and send emails in Gmail, manage Google Drive files, create and query Calendar events, and interact with Google Docs and Sheets. A unified entry point for Google productivity tools.",
+      "category": "productivity",
+      "protocol": "MCP",
+      "auth": {
+        "type": "oauth2",
+        "scopes": ["gmail", "drive", "calendar"]
+      },
+      "pricing": {
+        "model": "free",
+        "free_tier": true,
+        "details": "Free with Google account"
+      },
+      "endpoints": {
+        "package": "npm:@anthropic/google-workspace-mcp",
+        "docs": "https://github.com/anthropics/google-workspace-mcp"
+      },
+      "capabilities": ["email", "file-management", "calendar", "documents", "spreadsheets"],
+      "tags": ["google", "gmail", "drive", "calendar", "docs"],
+      "popularity": 90,
+      "verified": true,
+      "logo_icon": "mail",
+      "accent_color": "#4285F4"
+    },
+    {
+      "id": "openai-api",
+      "name": "OpenAI API",
+      "slug": "openai-api",
+      "tagline": "GPT, DALL-E, Whisper, and embeddings for sub-agents",
+      "description": "The OpenAI API gives agents access to GPT models for text generation, DALL-E for image generation, Whisper for audio transcription, and embedding models for semantic search. Agents can use these as sub-capabilities within larger workflows.",
+      "category": "ai-and-ml",
+      "protocol": "REST API",
+      "auth": {
+        "type": "api_key",
+        "header": "Authorization",
+        "prefix": "Bearer"
+      },
+      "pricing": {
+        "model": "per-token",
+        "free_tier": false,
+        "details": "Pay-per-use; varies by model"
+      },
+      "endpoints": {
+        "base_url": "https://api.openai.com/v1",
+        "docs": "https://platform.openai.com/docs"
+      },
+      "capabilities": ["text-generation", "image-generation", "transcription", "embeddings"],
+      "tags": ["ai", "llm", "gpt", "dalle", "whisper"],
+      "popularity": 98,
+      "verified": true,
+      "logo_icon": "brain",
+      "accent_color": "#10A37F"
+    },
+    {
+      "id": "anthropic-api",
+      "name": "Anthropic Claude API",
+      "slug": "anthropic-api",
+      "tagline": "Claude models with tool use, vision, and extended context",
+      "description": "Anthropic's API provides access to Claude models with native tool use, vision capabilities, and extended context windows. Agents can delegate complex reasoning, document analysis, and multi-step tool use to Claude as a sub-agent.",
+      "category": "ai-and-ml",
+      "protocol": "REST API",
+      "auth": {
+        "type": "api_key",
+        "header": "x-api-key"
+      },
+      "pricing": {
+        "model": "per-token",
+        "free_tier": false,
+        "details": "Pay-per-use; varies by model"
+      },
+      "endpoints": {
+        "base_url": "https://api.anthropic.com/v1",
+        "docs": "https://docs.anthropic.com"
+      },
+      "capabilities": ["text-generation", "tool-use", "vision", "document-analysis"],
+      "tags": ["ai", "llm", "claude", "reasoning", "tool-use"],
+      "popularity": 96,
+      "verified": true,
+      "logo_icon": "sparkles",
+      "accent_color": "#D4A373"
+    },
+    {
+      "id": "jira-mcp",
+      "name": "Jira MCP Server",
+      "slug": "jira-mcp",
+      "tagline": "Manage issues, sprints, and projects in Jira",
+      "description": "The Jira MCP server lets agents create and update issues, manage sprints, query project boards, and track progress. Integrates tightly with agile workflows — agents can triage bugs, update story points, and generate sprint reports.",
+      "category": "developer-tools",
+      "protocol": "MCP",
+      "auth": {
+        "type": "api_key",
+        "env_var": "JIRA_API_TOKEN"
+      },
+      "pricing": {
+        "model": "free",
+        "free_tier": true,
+        "details": "Free with Jira account"
+      },
+      "endpoints": {
+        "package": "npm:@atlassian/jira-mcp-server",
+        "docs": "https://developer.atlassian.com/cloud/jira/platform/mcp/"
+      },
+      "capabilities": ["issue-management", "sprint-management", "project-boards", "search"],
+      "tags": ["jira", "issues", "agile", "sprint", "project-management"],
+      "popularity": 80,
+      "verified": true,
+      "logo_icon": "clipboard-list",
+      "accent_color": "#0052CC"
+    },
+    {
+      "id": "docker-mcp",
+      "name": "Docker MCP Server",
+      "slug": "docker-mcp",
+      "tagline": "Manage containers, images, volumes, and networks",
+      "description": "Agents can manage Docker containers, images, volumes, and networks through MCP. Start and stop containers, pull images, inspect logs, manage Docker Compose stacks, and automate deployment workflows.",
+      "category": "infrastructure",
+      "protocol": "MCP",
+      "auth": {
+        "type": "none"
+      },
+      "pricing": {
+        "model": "free",
+        "free_tier": true,
+        "details": "Open source, self-hosted"
+      },
+      "endpoints": {
+        "package": "npm:@docker/mcp-server",
+        "docs": "https://docs.docker.com/mcp/"
+      },
+      "capabilities": ["container-management", "image-management", "compose", "logs", "networking"],
+      "tags": ["docker", "containers", "devops", "deployment", "infrastructure"],
+      "popularity": 85,
+      "verified": true,
+      "logo_icon": "box",
+      "accent_color": "#2496ED"
+    },
+    {
+      "id": "pagerduty-mcp",
+      "name": "PagerDuty MCP Server",
+      "slug": "pagerduty-mcp",
+      "tagline": "Incident management and on-call coordination",
+      "description": "Connect agents to PagerDuty for incident management. Trigger, acknowledge, and resolve incidents. Query on-call schedules, escalation policies, and service health. Agents can automate incident response workflows.",
+      "category": "infrastructure",
+      "protocol": "MCP",
+      "auth": {
+        "type": "api_key",
+        "env_var": "PAGERDUTY_API_KEY"
+      },
+      "pricing": {
+        "model": "free",
+        "free_tier": true,
+        "details": "Free with PagerDuty account"
+      },
+      "endpoints": {
+        "package": "npm:@pagerduty/mcp-server",
+        "docs": "https://developer.pagerduty.com/docs/mcp"
+      },
+      "capabilities": ["incident-management", "on-call", "escalation", "service-health"],
+      "tags": ["pagerduty", "incidents", "on-call", "alerting", "sre"],
+      "popularity": 72,
+      "verified": true,
+      "logo_icon": "alert-triangle",
+      "accent_color": "#06AC38"
+    },
+    {
+      "id": "vectara-mcp",
+      "name": "Vectara MCP Server",
+      "slug": "vectara-mcp",
+      "tagline": "Semantic search and RAG over your data",
+      "description": "Vectara's MCP server enables agents to perform semantic search and retrieval-augmented generation (RAG) over your document collections. Upload documents, query them with natural language, and get grounded answers with reduced hallucination through Vectara's Trusted RAG platform.",
+      "category": "ai-and-ml",
+      "protocol": "MCP",
+      "auth": {
+        "type": "api_key",
+        "env_var": "VECTARA_API_KEY"
+      },
+      "pricing": {
+        "model": "freemium",
+        "free_tier": true,
+        "details": "Free tier available; Growth from $50/month"
+      },
+      "endpoints": {
+        "package": "npm:@vectara/mcp-server",
+        "docs": "https://docs.vectara.com/mcp"
+      },
+      "capabilities": ["semantic-search", "rag", "document-indexing", "natural-language-query"],
+      "tags": ["search", "rag", "semantic", "vector-db", "knowledge-base"],
+      "popularity": 70,
+      "verified": true,
+      "logo_icon": "database",
+      "accent_color": "#5046E4"
+    }
+  ]
+}
