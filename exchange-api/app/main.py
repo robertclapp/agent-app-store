@@ -16,12 +16,14 @@ Humans/developers can:
   GET  /openapi.json            — machine-readable OpenAPI spec
 """
 
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from contextlib import asynccontextmanager
 
-from app.db.database import init_db
+from app.db.database import init_db, close_db
 from app.routers import signals, workflows, compatibility, tools, leaderboard
 
 
@@ -29,6 +31,7 @@ from app.routers import signals, workflows, compatibility, tools, leaderboard
 async def lifespan(app: FastAPI):
     await init_db()
     yield
+    await close_db()
 
 
 app = FastAPI(
@@ -63,11 +66,16 @@ This API is itself discoverable at `/.well-known/agent.json`.
     lifespan=lifespan,
 )
 
+ALLOWED_ORIGINS = os.getenv(
+    "CORS_ORIGINS",
+    "https://agentappstore.dev,http://localhost:3000,http://localhost:8000"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["GET", "POST"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 app.include_router(signals.router,       prefix="/api/v1", tags=["Signals"])

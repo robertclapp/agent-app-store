@@ -21,6 +21,14 @@ async def get_db() -> aiosqlite.Connection:
     return _db
 
 
+async def close_db():
+    """Close the database connection for clean shutdown."""
+    global _db
+    if _db is not None:
+        await _db.close()
+        _db = None
+
+
 async def init_db():
     db = await get_db()
     await db.executescript("""

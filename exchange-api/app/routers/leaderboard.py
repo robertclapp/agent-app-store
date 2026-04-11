@@ -1,32 +1,12 @@
 from fastapi import APIRouter, Query
 from app.models.schemas import LeaderboardResponse, LeaderboardEntry
 from app.db.database import get_db
+from app.registry import TOOL_METADATA
 import json
 from datetime import datetime, timezone
 from collections import defaultdict, Counter
 
 router = APIRouter()
-
-TOOL_METADATA = {
-    "perplexity-sonar":     ("Perplexity Sonar API",      "search-and-data"),
-    "brave-search-api":     ("Brave Search API",           "search-and-data"),
-    "github-mcp":           ("GitHub MCP Server",          "developer-tools"),
-    "notion-mcp":           ("Notion MCP Server",          "productivity"),
-    "slack-mcp":            ("Slack MCP Server",           "communication"),
-    "playwright-mcp":       ("Playwright MCP Server",      "developer-tools"),
-    "firecrawl-mcp":        ("Firecrawl MCP Server",       "data-and-analytics"),
-    "composio-mcp":         ("Composio MCP Server",        "productivity"),
-    "terraform-mcp":        ("Terraform MCP Server",       "infrastructure"),
-    "datadog-mcp":          ("Datadog MCP Server",         "infrastructure"),
-    "figma-mcp":            ("Figma MCP Server",           "design"),
-    "google-workspace-mcp": ("Google Workspace MCP",       "productivity"),
-    "openai-api":           ("OpenAI API",                 "ai-and-ml"),
-    "anthropic-api":        ("Anthropic Claude API",       "ai-and-ml"),
-    "jira-mcp":             ("Jira MCP Server",            "developer-tools"),
-    "docker-mcp":           ("Docker MCP Server",          "infrastructure"),
-    "pagerduty-mcp":        ("PagerDuty MCP Server",       "infrastructure"),
-    "vectara-mcp":          ("Vectara MCP Server",         "ai-and-ml"),
-}
 
 
 @router.get(
@@ -36,7 +16,7 @@ TOOL_METADATA = {
     description="Returns tools ranked by community-reported reliability score. Filter by category to see category-specific rankings.",
 )
 async def get_leaderboard(
-    category: str | None = Query(None, description="Filter by category slug", example="developer-tools"),
+    category: str | None = Query(None, description="Filter by category slug"),
     limit: int = Query(10, ge=1, le=50),
 ):
     db = await get_db()

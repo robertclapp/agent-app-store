@@ -1,18 +1,11 @@
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import SignalCreate, SignalResponse
 from app.db.database import get_db
+from app.registry import is_known_tool
 import hashlib, json, uuid
 from datetime import datetime, timezone
 
 router = APIRouter()
-
-KNOWN_TOOLS = {
-    "perplexity-sonar", "brave-search-api", "github-mcp", "notion-mcp",
-    "slack-mcp", "playwright-mcp", "firecrawl-mcp", "composio-mcp",
-    "terraform-mcp", "datadog-mcp", "figma-mcp", "google-workspace-mcp",
-    "openai-api", "anthropic-api", "jira-mcp", "docker-mcp",
-    "pagerduty-mcp", "vectara-mcp",
-}
 
 
 @router.post(
@@ -29,7 +22,7 @@ are hashed before storage for privacy.
     """,
 )
 async def create_signal(signal: SignalCreate):
-    if signal.tool not in KNOWN_TOOLS:
+    if not is_known_tool(signal.tool):
         raise HTTPException(
             status_code=422,
             detail=f"Unknown tool ID: '{signal.tool}'. Check the registry at agentappstore.dev"
@@ -37,7 +30,7 @@ async def create_signal(signal: SignalCreate):
 
     db = await get_db()
     signal_id = str(uuid.uuid4())
-    agent_hash = hashlib.sha256((signal.agent_id or "anonymous").encode()).hexdigest()[:16]
+    agent_hash = hashlib.sha256((signal.agent_id or "anonymous").encode()).hexdigest()[:32]
 
     await db.execute(
         """INSERT INTO signals (id, tool, signal_type, context, agent_hash, created_at)

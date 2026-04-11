@@ -993,3 +993,26 @@
   white-space: nowrap;
   border-width: 0;
 }
+
+/* --- Readiness Toolkit Buttons --- */
+.readiness-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  font-size: var(--text-sm);
+  background: var(--color-surface-offset);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  width: 100%;
+  font-family: var(--font-body);
+  transition: background 180ms ease, border-color 180ms ease;
+}
+
+.readiness-btn:hover {
+  background: var(--color-surface-dynamic, var(--color-surface));
+}

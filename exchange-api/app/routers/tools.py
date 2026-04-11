@@ -15,7 +15,7 @@ router = APIRouter()
     description="Returns aggregated reliability, latency, and usage stats for a specific tool built from community-submitted signals.",
 )
 async def get_tool_stats(
-    tool_id: str = Path(..., description="Tool ID", example="github-mcp"),
+    tool_id: str = Path(..., description="Tool ID"),
 ):
     db = await get_db()
 

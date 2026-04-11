@@ -58,9 +58,15 @@ function buildAuth(authType, api) {
   switch (authType) {
     case 'api_key': {
       const scheme = findScheme(api, 'apiKey');
+      if (scheme?.in === 'query') {
+        return {
+          type: 'api_key',
+          key_query_param: scheme.name || 'api_key',
+        };
+      }
       return {
         type: 'api_key',
-        key_header: scheme?.in === 'header' ? (scheme.name || 'X-API-Key') : 'Authorization',
+        key_header: scheme?.name || 'X-API-Key',
       };
     }
     case 'bearer':

@@ -220,7 +220,11 @@ function generateToolsCode({ api, tools, lang }) {
   const ts = lang === 'typescript';
   const baseUrl = getBaseUrl(api);
 
-  const toolDefs = tools.slice(0, 50).map(tool => {
+  const MAX_TOOLS = 50;
+  if (tools.length > MAX_TOOLS) {
+    console.warn(`Warning: API has ${tools.length} endpoints but MCP servers are limited to ${MAX_TOOLS} tools. ${tools.length - MAX_TOOLS} endpoints were omitted.`);
+  }
+  const toolDefs = tools.slice(0, MAX_TOOLS).map(tool => {
     const inputSchema = {
       type: 'object',
       properties: {},
@@ -241,8 +245,8 @@ function generateToolsCode({ api, tools, lang }) {
   }`;
   });
 
-  const callCases = tools.slice(0, 50).map(tool => {
-    const pathWithParams = tool.path.replace(/\{([^}]+)\}/g, '${args.$1}');
+  const callCases = tools.slice(0, MAX_TOOLS).map(tool => {
+    const pathWithParams = tool.path.replace(/\{([^}]+)\}/g, (_, name) => '${args.' + name + '}');
     const queryParams = tool.params.filter(p => p.in === 'query');
     const bodyParams = tool.params.filter(p => p.in === 'body');
 
@@ -381,7 +385,7 @@ function generateEnvExample(api, name) {
     authType === 'api_key' ? 'API_KEY=your-api-key-here' : '',
     authType === 'bearer' ? 'API_TOKEN=your-bearer-token-here' : '',
     authType === 'oauth2' ? 'CLIENT_ID=\nCLIENT_SECRET=\nACCESS_TOKEN=' : '',
-  ].filter(l => l !== undefined).join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 function generateReadme({ name, api, tools }) {

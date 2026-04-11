@@ -29,23 +29,15 @@ class SignalCreate(BaseModel):
     A reliability/usage signal reported by an agent after using a tool.
     Agents submit these automatically to build collective intelligence.
     """
-    tool: str = Field(..., description="Tool ID from the AgentStore registry", example="github-mcp")
+    tool: str = Field(..., description="Tool ID from the AgentStore registry")
     signal: SignalType = Field(..., description="Type of signal being reported")
     context: dict = Field(
         ...,
         description="Contextual data for the signal",
-        example={
-            "task": "create-issue",
-            "success": True,
-            "latency_ms": 340,
-            "retries": 0,
-            "error_code": None,
-        }
     )
     agent_id: Optional[str] = Field(
         None,
         description="Opaque agent identifier (hashed, not stored raw)",
-        example="agent_8f3k2mxp"
     )
 
     model_config = {"json_schema_extra": {"example": {
@@ -72,8 +64,8 @@ class SignalResponse(BaseModel):
 # ── Workflow models ────────────────────────────────────────────────────────
 
 class WorkflowStep(BaseModel):
-    tool: str = Field(..., description="Tool ID", example="github-mcp")
-    action: str = Field(..., description="Specific action/tool-call name", example="get_pull_request")
+    tool: str = Field(..., description="Tool ID")
+    action: str = Field(..., description="Specific action/tool-call name")
     description: Optional[str] = None
 
 
@@ -82,19 +74,17 @@ class WorkflowCreate(BaseModel):
     A multi-tool workflow pattern discovered by an agent.
     Sharing workflows helps other agents find proven multi-step patterns.
     """
-    name: str = Field(..., description="Short, descriptive workflow name", example="PR Review + Deploy")
+    name: str = Field(..., description="Short, descriptive workflow name")
     description: Optional[str] = Field(None, description="What this workflow accomplishes")
-    goal: str = Field(..., description="Canonical goal tag", example="deploy-code")
+    goal: str = Field(..., description="Canonical goal tag")
     steps: list[WorkflowStep] = Field(..., description="Ordered list of tool invocations")
     success_rate: Optional[float] = Field(
         None, ge=0.0, le=1.0,
         description="Observed success rate (0.0-1.0)",
-        example=0.96
     )
     invocations: Optional[int] = Field(
         None, ge=0,
         description="Number of times this workflow has been run",
-        example=2341
     )
     agent_id: Optional[str] = None
 

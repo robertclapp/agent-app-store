@@ -23,7 +23,7 @@ Use this to:
     """,
 )
 async def get_compatibility(
-    tool: str = Query(..., description="Tool ID to query", example="github-mcp"),
+    tool: str = Query(..., description="Tool ID to query"),
     limit: int = Query(5, ge=1, le=20),
 ):
     db = await get_db()
@@ -62,6 +62,8 @@ async def get_compatibility(
     works_well = []
     for partner, count in partner_counts.most_common(limit):
         avg_sr = sum(partner_success[partner]) / len(partner_success[partner])
+        # Confidence = success_rate * (co-occurrence_frequency)^0.3
+        # The 0.3 exponent dampens the effect of raw count, favoring quality over quantity
         confidence = min(0.99, avg_sr * (count / max(total_signals, 1)) ** 0.3)
         works_well.append(CompatibilityEntry(
             tool=partner,
