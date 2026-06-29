@@ -4,9 +4,9 @@
     "name": "Agent App Store",
     "version": "1.0.0",
     "description": "A protocol-agnostic registry of agentic tools, APIs, and MCP servers that AI agents can query to discover capabilities for completing tasks.",
-    "updated": "2026-04-10T22:25:00Z",
+    "updated": "2026-06-29T08:58:58Z",
     "spec_version": "0.1.0",
-    "total_tools": 18,
+    "total_tools": 19,
     "categories": [
       "search-and-data",
       "developer-tools",
@@ -523,6 +523,35 @@
       "verified": true,
       "logo_icon": "database",
       "accent_color": "#5046E4"
+    },
+    {
+      "id": "hermes-tweet",
+      "name": "Hermes Tweet",
+      "slug": "hermes-tweet",
+      "tagline": "Hermes Agent plugin for X/Twitter automation",
+      "description": "Hermes Tweet is a native Hermes Agent plugin that adds X/Twitter search, account reads, trend reads, monitors, webhooks, media, and approval-gated account actions through Xquik. It installs from PyPI or the source repository and keeps write-like actions disabled unless explicitly enabled.",
+      "category": "communication",
+      "protocol": "Hermes Agent Plugin",
+      "auth": {
+        "type": "api_key",
+        "env_var": "XQUIK_API_KEY"
+      },
+      "pricing": {
+        "model": "subscription",
+        "free_tier": false,
+        "details": "Requires a Xquik API key."
+      },
+      "endpoints": {
+        "package": "pypi:hermes-tweet",
+        "docs": "https://github.com/Xquik-dev/hermes-tweet#readme",
+        "homepage": "https://xquik.com"
+      },
+      "capabilities": ["social-media-research", "x-search", "account-reads", "trend-monitoring", "approval-gated-actions"],
+      "tags": ["hermes-agent", "twitter", "x", "social-media", "automation"],
+      "popularity": 72,
+      "verified": false,
+      "logo_icon": "message-square",
+      "accent_color": "#111827"
     }
   ]
 }

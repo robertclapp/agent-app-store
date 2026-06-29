@@ -11,7 +11,7 @@ KNOWN_TOOLS = {
     "slack-mcp", "playwright-mcp", "firecrawl-mcp", "composio-mcp",
     "terraform-mcp", "datadog-mcp", "figma-mcp", "google-workspace-mcp",
     "openai-api", "anthropic-api", "jira-mcp", "docker-mcp",
-    "pagerduty-mcp", "vectara-mcp",
+    "pagerduty-mcp", "vectara-mcp", "hermes-tweet",
 }
 
 

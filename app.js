@@ -380,7 +380,15 @@ npx ${tool.endpoints.package || 'mcp-server'}
       }` : ''}
     }
   }
-}` :
+}` : tool.endpoints.package ?
+`// Install ${tool.protocol}
+${tool.endpoints.package.startsWith('pypi:') ? `pip install ${tool.endpoints.package.replace('pypi:', '')}` : tool.endpoints.package}
+
+${tool.auth.type !== 'none' ? `// Required environment variable
+${tool.auth.env_var || 'API_KEY'}=your-key
+
+` : ''}// Setup guide
+${tool.endpoints.docs || tool.endpoints.homepage || ''}` :
 `// REST API Integration
 const response = await fetch(
   "${tool.endpoints.base_url || ''}",

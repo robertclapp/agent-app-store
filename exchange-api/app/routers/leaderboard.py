@@ -26,6 +26,7 @@ TOOL_METADATA = {
     "docker-mcp":           ("Docker MCP Server",          "infrastructure"),
     "pagerduty-mcp":        ("PagerDuty MCP Server",       "infrastructure"),
     "vectara-mcp":          ("Vectara MCP Server",         "ai-and-ml"),
+    "hermes-tweet":         ("Hermes Tweet",                "communication"),
 }
 
 
