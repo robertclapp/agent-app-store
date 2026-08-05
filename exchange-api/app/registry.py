@@ -6,6 +6,8 @@ Loaded from the root registry.json to stay in sync with the frontend.
 import json
 from pathlib import Path
 
+# Resolves to the repo-root registry.json: app/ -> exchange-api/ -> repo root.
+# Keep the .parent count in sync if this module ever moves.
 _REGISTRY_PATH = Path(__file__).resolve().parent.parent.parent / "registry.json"
 
 def _load_registry() -> dict:
