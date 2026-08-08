@@ -2,9 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
+  workflow_dispatch:
 
 jobs:
   # ── Exchange API (Python/FastAPI) ───────────────────────────────────────
@@ -23,12 +24,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: exchange-api/requirements.txt
+          cache-dependency-path: exchange-api/requirements-dev.txt
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pytest pytest-asyncio httpx
+        run: pip install -r requirements-dev.txt
 
       - name: Run tests
         run: pytest tests/ -v --tb=short
@@ -55,13 +54,15 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: create-mcp-server/package.json
+          cache-dependency-path: create-mcp-server/package-lock.json
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
+      # Pass explicit files: `node --test test/` resolves the directory as a
+      # module rather than discovering tests inside it, and fails.
       - name: Run tests
-        run: node --test test/
+        run: node --test test/*.js
 
   # ── Frontend Validation ─────────────────────────────────────────────────
   frontend:
@@ -94,9 +95,20 @@ jobs:
       - name: Build Docker image
         run: docker build -t agent-exchange-api ./exchange-api
 
+      # Poll rather than `sleep 3` — a fixed wait races uvicorn's startup and
+      # makes this job flaky. Dump container logs if it never becomes healthy.
       - name: Test container starts
         run: |
           docker run -d --name test-api -p 8000:8000 agent-exchange-api
-          sleep 3
-          curl -f http://localhost:8000/health || exit 1
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health; then
+              echo "container healthy after ${i}s"
+              docker stop test-api
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "container failed to become healthy; logs:"
+          docker logs test-api
           docker stop test-api
+          exit 1
