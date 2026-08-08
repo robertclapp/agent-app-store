@@ -2,7 +2,10 @@ version: "3.9"
 
 services:
   api:
-    build: .
+    # Context is the repo root so registry.json is in scope; see Dockerfile.
+    build:
+      context: ..
+      dockerfile: exchange-api/Dockerfile
     ports:
       - "8000:8000"
     volumes:

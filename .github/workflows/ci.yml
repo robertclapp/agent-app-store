@@ -92,8 +92,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Context is the repo root so registry.json is in scope; see Dockerfile.
       - name: Build Docker image
-        run: docker build -t agent-exchange-api ./exchange-api
+        run: docker build -f exchange-api/Dockerfile -t agent-exchange-api .
 
       # Poll rather than `sleep 3` — a fixed wait races uvicorn's startup and
       # makes this job flaky. Dump container logs if it never becomes healthy.
@@ -101,14 +102,31 @@ jobs:
         run: |
           docker run -d --name test-api -p 8000:8000 agent-exchange-api
           for i in $(seq 1 30); do
-            if curl -fsS http://localhost:8000/health; then
-              echo "container healthy after ${i}s"
-              docker stop test-api
+            if body=$(curl -fsS http://localhost:8000/health); then
+              echo "container healthy after ${i}s: $body"
+              echo "HEALTH_BODY=$body" >> "$GITHUB_ENV"
               exit 0
             fi
             sleep 1
           done
           echo "container failed to become healthy; logs:"
           docker logs test-api
-          docker stop test-api
           exit 1
+
+      # /health returns ok even when registry.json is missing, which is exactly
+      # how the empty-registry bug stayed invisible. Assert the registry really
+      # loaded: an empty one 422s every POST /signals and empties the leaderboard.
+      - name: Verify registry loaded in container
+        run: |
+          count=$(printf '%s' "$HEALTH_BODY" | python -c "import json,sys; print(json.load(sys.stdin)['tools_known'])")
+          echo "tools_known=$count"
+          if [ "$count" -lt 1 ]; then
+            echo "FAIL: container started with an empty tool registry."
+            docker logs test-api
+            exit 1
+          fi
+          echo "OK: registry loaded with $count tools."
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f test-api || true

@@ -24,6 +24,7 @@ from fastapi.responses import RedirectResponse
 from contextlib import asynccontextmanager
 
 from app.db.database import init_db, close_db
+from app.registry import KNOWN_TOOL_IDS
 from app.routers import signals, workflows, compatibility, tools, leaderboard
 
 
@@ -92,4 +93,11 @@ async def root():
 
 @app.get("/health", tags=["Health"])
 async def health():
-    return {"status": "ok", "version": "0.1.0"}
+    # tools_known surfaces registry state: if registry.json fails to load the
+    # API still answers ok here while rejecting every signal, so the count is
+    # what makes that visible to deploy checks.
+    return {
+        "status": "ok",
+        "version": "0.1.0",
+        "tools_known": len(KNOWN_TOOL_IDS),
+    }
