@@ -34,7 +34,23 @@ def _load_registry() -> dict:
     try:
         with open(path) as f:
             data = json.load(f)
+        if not isinstance(data, dict) or not isinstance(data.get("tools"), list):
+            raise ValueError("registry root must contain a tools array")
         tools = data.get("tools", [])
+        if not all(
+            isinstance(tool, dict)
+            and isinstance(tool.get("id"), str)
+            and bool(tool["id"].strip())
+            and isinstance(tool.get("name"), str)
+            and bool(tool["name"].strip())
+            and isinstance(tool.get("category"), str)
+            and bool(tool["category"].strip())
+            for tool in tools
+        ):
+            raise ValueError("every registry tool needs string id, name, and category")
+        ids = [tool["id"] for tool in tools]
+        if len(ids) != len(set(ids)):
+            raise ValueError("registry contains duplicate tool IDs")
         return {
             "tools_by_id": {t["id"]: t for t in tools},
             "tool_ids": {t["id"] for t in tools},
@@ -42,11 +58,12 @@ def _load_registry() -> dict:
                 t["id"]: (t["name"], t["category"]) for t in tools
             },
         }
-    except (FileNotFoundError, json.JSONDecodeError, KeyError) as exc:
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         # Degrade rather than crash, but say so loudly: an empty registry makes
         # is_known_tool() reject every ID, so POST /signals 422s on all input
         # and the leaderboard renders empty. That failure is otherwise silent —
-        # /health still returns ok — so this warning is the only signal.
+        # /health returns 503 as a deployment signal, and this warning records
+        # the underlying cause.
         logger.warning(
             "Tool registry could not be loaded from %s (%s). Falling back to an "
             "empty registry: signal submission will reject every tool ID and the "

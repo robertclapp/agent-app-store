@@ -103,49 +103,51 @@ const CATEGORIES = {
 };
 
 // --- Business Readiness Toolkit ---
-/** @type {Array<{icon: string, title: string, description: string, tag: string, cta: string}>} */
+/** @type {Array<{icon: string, title: string, description: string, tag: string, cta: string, href?: string}>} */
 const READINESS_TOOLS = [
   {
     icon: 'file-json',
-    title: 'Agent Manifest Generator',
-    description: 'Generate a /.well-known/agent.json file for your domain. Describes your business capabilities, API endpoints, and how agents should interact with your services. Deploy it and you\'re on the map.',
+    title: 'Agent Manifest Specification',
+    description: 'Use the /.well-known/agent.json specification to describe your business capabilities, API endpoints, and agent interaction model. The MCP scaffold can generate a compatible manifest.',
     tag: 'Essential',
-    cta: 'Generate manifest'
+    cta: 'View manifest spec',
+    href: './SPEC.md'
   },
   {
     icon: 'plug',
     title: 'MCP Server Scaffold',
     description: 'Scaffold a custom MCP server that wraps your existing API. Agents get structured tool definitions, typed inputs/outputs, and auth flows — without rewriting your backend.',
     tag: 'Developer',
-    cta: 'Start scaffolding'
+    cta: 'Open scaffold guide',
+    href: './create-mcp-server/README.md'
   },
   {
     icon: 'shield-check',
     title: 'Agent Auth Gateway',
-    description: 'Secure gateway for agent-to-service authentication. Issues scoped tokens, enforces rate limits, logs all agent interactions. Drop-in middleware for Express, FastAPI, or any HTTP server.',
-    tag: 'Security',
-    cta: 'View docs'
+    description: 'Planned secure gateway for agent-to-service authentication, scoped tokens, rate limits, and interaction logs across common server frameworks.',
+    tag: 'Planned',
+    cta: 'Coming soon'
   },
   {
     icon: 'test-tube',
     title: 'Agent Compatibility Tester',
-    description: 'Test your API against the top 10 agent frameworks. Validates response schemas, error handling, auth flows, and streaming support. Get a compatibility score and fix list.',
-    tag: 'QA',
-    cta: 'Run tests'
+    description: 'Planned API compatibility checks covering response schemas, error handling, authentication flows, and streaming support.',
+    tag: 'Planned',
+    cta: 'Coming soon'
   },
   {
     icon: 'book-text',
     title: 'LLM-Readable Docs Converter',
-    description: 'Convert your existing API documentation into structured, LLM-optimized format. Agents can parse these instantly — no scraping, no guessing at parameters. Supports OpenAPI, GraphQL, and gRPC.',
-    tag: 'Documentation',
-    cta: 'Convert docs'
+    description: 'Planned conversion of existing API documentation into structured, LLM-readable formats for OpenAPI, GraphQL, and gRPC services.',
+    tag: 'Planned',
+    cta: 'Coming soon'
   },
   {
     icon: 'bar-chart-2',
     title: 'Agent Analytics Dashboard',
-    description: 'Track how agents discover and use your services. See which capabilities are most queried, common failure points, popular workflow patterns, and agent-initiated revenue attribution.',
-    tag: 'Analytics',
-    cta: 'Set up tracking'
+    description: 'Planned analytics for agent discovery, capability demand, failure points, workflow patterns, and agent-initiated attribution.',
+    tag: 'Planned',
+    cta: 'Coming soon'
   },
 ];
 
@@ -358,9 +360,11 @@ function renderReadiness() {
         line-height: 1.5;
         flex: 1;
       ">${escapeHtml(tool.description)}</p>
-      <button class="readiness-btn">${escapeHtml(tool.cta)}
-        <i data-lucide="arrow-right" style="width:14px;height:14px;"></i>
-      </button>
+      ${tool.href
+        ? `<a class="readiness-btn" href="${escapeHtml(tool.href)}">${escapeHtml(tool.cta)}
+            <i data-lucide="arrow-right" style="width:14px;height:14px;"></i>
+          </a>`
+        : `<span class="readiness-btn readiness-btn-disabled" aria-disabled="true">${escapeHtml(tool.cta)}</span>`}
     </div>
   `).join('');
 
@@ -580,32 +584,6 @@ function copyToolJSON(toolId) {
 // --- Event Listeners ---
 /** Bootstraps the application once the DOM is fully loaded. */
 document.addEventListener('DOMContentLoaded', () => {
-  // Inject readiness button hover styles
-  const styleEl = document.createElement('style');
-  styleEl.textContent = `
-    .readiness-btn {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: var(--space-2);
-      padding: var(--space-2) var(--space-4);
-      border-radius: var(--radius-md);
-      font-weight: 600;
-      font-size: var(--text-sm);
-      background: var(--color-surface-offset);
-      color: var(--color-text);
-      border: 1px solid var(--color-border);
-      cursor: pointer;
-      width: 100%;
-      font-family: var(--font-body);
-      transition: background 180ms ease, border-color 180ms ease;
-    }
-    .readiness-btn:hover {
-      background: var(--color-surface-dynamic);
-    }
-  `;
-  document.head.appendChild(styleEl);
-
   loadRegistry();
   renderReadiness();
 

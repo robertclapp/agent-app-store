@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import enquirer from 'enquirer';
 import ora from 'ora';
+import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { generateFromOpenAPI } from './generators/openapi.js';
@@ -34,9 +35,18 @@ export async function run() {
     .option('--skip-agent-json', 'Skip generating /.well-known/agent.json')
     .option('--typescript', 'Generate TypeScript (default: TypeScript)')
     .option('--javascript', 'Generate JavaScript instead of TypeScript')
+    .option('--force', 'Allow generated files to overwrite files in a non-empty destination')
     .parse(process.argv);
 
   const opts = program.opts();
+
+  const selectedModes = [opts.fromOpenapi, opts.fromUrl, opts.blank].filter(Boolean);
+  if (selectedModes.length > 1) {
+    program.error('Choose exactly one of --from-openapi, --from-url, or --blank.');
+  }
+  if (opts.typescript && opts.javascript) {
+    program.error('Choose either --typescript or --javascript, not both.');
+  }
 
   // --- Interactive mode if no flags given ---
   if (!opts.fromOpenapi && !opts.fromUrl && !opts.blank) {
@@ -85,12 +95,26 @@ export async function run() {
     opts.name = name;
   }
 
+  if (!/^[a-z0-9][a-z0-9-]{0,213}$/.test(opts.name)) {
+    program.error('Server name must be 1-214 lowercase letters, numbers, or hyphens, and start with a letter or number.');
+  }
+
   // --- Language choice ---
   if (!opts.javascript) {
     opts.typescript = true;
   }
 
-  const outputDir = path.resolve(opts.output, opts.name);
+  const outputBase = path.resolve(opts.output);
+  const outputDir = path.resolve(outputBase, opts.name);
+  if (path.dirname(outputDir) !== outputBase) {
+    program.error('Server name must resolve directly inside the output directory.');
+  }
+  if (await isSymbolicLink(outputDir)) {
+    program.error(`Destination must not be a symbolic link: ${outputDir}`);
+  }
+  if (!opts.force && await directoryHasEntries(outputDir)) {
+    program.error(`Destination is not empty: ${outputDir}\nRe-run with --force to overwrite generated files while preserving unrelated files.`);
+  }
   const lang = opts.typescript ? 'typescript' : 'javascript';
 
   console.log('');
@@ -142,7 +166,7 @@ export async function run() {
     console.log('');
     console.log(chalk.bold('  Next steps:'));
     console.log('');
-    console.log(`  ${chalk.gray('1.')} ${chalk.cyan(`cd ${opts.name}`)}`);
+    console.log(`  ${chalk.gray('1.')} ${chalk.cyan(`cd ${shellQuote(outputDir)}`)}`);
     console.log(`  ${chalk.gray('2.')} ${chalk.cyan('npm install')}`);
     console.log(`  ${chalk.gray('3.')} ${chalk.cyan('npm run dev')}         ${chalk.gray('# starts MCP server in dev mode')}`);
     console.log('');
@@ -159,6 +183,28 @@ export async function run() {
     if (process.env.DEBUG) console.error(err);
     process.exit(1);
   }
+}
+
+async function directoryHasEntries(directory) {
+  try {
+    return (await fs.readdir(directory)).length > 0;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+async function isSymbolicLink(destination) {
+  try {
+    return (await fs.lstat(destination)).isSymbolicLink();
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
 }
 
 async function discoverSpec(baseUrl) {

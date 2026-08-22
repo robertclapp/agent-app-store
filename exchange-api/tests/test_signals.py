@@ -90,11 +90,67 @@ async def test_agent_id_is_hashed(client, sample_signal):
 @pytest.mark.asyncio
 async def test_all_signal_types_accepted(client):
     """All four signal types should be accepted."""
-    for sig_type in ["reliability", "latency", "compatibility", "error"]:
+    contexts = {
+        "reliability": {"task": "test", "success": True},
+        "latency": {"task": "test", "latency_ms": 12.5},
+        "compatibility": {
+            "task": "test",
+            "partner_tool": "slack-mcp",
+            "compatible": True,
+        },
+        "error": {"task": "test", "error": "timeout"},
+    }
+    for sig_type, context in contexts.items():
         payload = {
             "tool": "github-mcp",
             "signal": sig_type,
-            "context": {"task": "test", "success": True},
+            "context": context,
         }
         resp = await client.post("/api/v1/signals", json=payload)
         assert resp.status_code == 200, f"Signal type '{sig_type}' was rejected"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context", [
+    {"success": True, "latency_ms": "slow"},
+    {"success": "yes", "latency_ms": 10},
+    {"success": True, "task": ["not", "hashable"]},
+    {"success": True, "latency_ms": -1},
+])
+async def test_reliability_context_rejects_values_that_break_aggregation(
+    client, context
+):
+    resp = await client.post("/api/v1/signals", json={
+        "tool": "github-mcp",
+        "signal": "reliability",
+        "context": context,
+    })
+    assert resp.status_code == 422
+
+    stats = await client.get("/api/v1/tools/github-mcp/stats")
+    assert stats.status_code == 200
+    assert stats.json()["total_signals"] == 0
+
+
+@pytest.mark.asyncio
+async def test_each_signal_type_requires_its_contract(client):
+    for signal_type in ["reliability", "latency", "compatibility", "error"]:
+        resp = await client.post("/api/v1/signals", json={
+            "tool": "github-mcp",
+            "signal": signal_type,
+            "context": {},
+        })
+        assert resp.status_code == 422, signal_type
+
+
+@pytest.mark.asyncio
+async def test_context_rejects_non_finite_values_even_in_extension_fields(client):
+    resp = await client.post(
+        "/api/v1/signals",
+        content=(
+            '{"tool":"github-mcp","signal":"reliability",'
+            '"context":{"success":true,"extension":1e999}}'
+        ),
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 422

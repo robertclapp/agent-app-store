@@ -51,7 +51,7 @@ async def get_compatibility(
 
     for row in rows:
         tools = json.loads(row["tools_used"])
-        sr = row["success_rate"] or 0.75
+        sr = row["success_rate"] if row["success_rate"] is not None else 0.75
         for t in tools:
             if t == tool:
                 continue

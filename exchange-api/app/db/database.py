@@ -59,5 +59,15 @@ async def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_workflows_goal  ON workflows(goal);
         CREATE INDEX IF NOT EXISTS idx_workflows_tools ON workflows(tools_used);
+
+        CREATE TABLE IF NOT EXISTS rate_limits (
+            scope         TEXT NOT NULL,
+            identity_hash TEXT NOT NULL,
+            window_start  INTEGER NOT NULL,
+            request_count INTEGER NOT NULL,
+            PRIMARY KEY (scope, identity_hash)
+        );
+        CREATE INDEX IF NOT EXISTS idx_rate_limits_window
+            ON rate_limits(window_start);
     """)
     await db.commit()

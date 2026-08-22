@@ -1,16 +1,15 @@
 /**
- * OpenAPI → MCP Server Generator
+ * OpenAPI / Swagger to MCP server generator.
  *
- * Takes an OpenAPI 3.x or Swagger 2.x spec and generates:
- * - A complete MCP server with one tool per API endpoint
- * - TypeScript or JavaScript source with JSON Schema tool inputs
- * - An API client with environment-based authentication
- * - README with usage instructions
+ * Treat the entire source document as untrusted. Every value that enters
+ * generated JavaScript is serialized as data, never interpolated as code.
  */
 
 import fs from 'fs-extra';
 import path from 'path';
 import SwaggerParser from '@apidevtools/swagger-parser';
+
+const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options'];
 
 export async function generateFromOpenAPI({ specSource, name, outputDir, lang }) {
   let api;
@@ -26,46 +25,27 @@ export async function generateFromOpenAPI({ specSource, name, outputDir, lang })
 
   const tools = extractTools(api);
   const files = [];
+  const ext = lang === 'typescript' ? 'ts' : 'js';
 
-  // --- package.json ---
-  const pkgJson = generatePackageJson(name, api, lang);
-  await fs.writeJson(path.join(outputDir, 'package.json'), pkgJson, { spaces: 2 });
+  await fs.writeJson(path.join(outputDir, 'package.json'), generatePackageJson(name, api, lang), { spaces: 2 });
   files.push('package.json');
 
-  // --- tsconfig.json (if TypeScript) ---
   if (lang === 'typescript') {
     await fs.writeJson(path.join(outputDir, 'tsconfig.json'), generateTsConfig(), { spaces: 2 });
     files.push('tsconfig.json');
   }
 
-  // --- Main server file ---
-  const serverCode = generateServerCode({ name, api, tools, lang });
-  const ext = lang === 'typescript' ? 'ts' : 'js';
-  await fs.writeFile(path.join(outputDir, `src/index.${ext}`), serverCode);
+  await fs.writeFile(path.join(outputDir, `src/index.${ext}`), generateServerCode({ name, api, lang }));
   files.push(`src/index.${ext}`);
-
-  // --- Tools file ---
-  const toolsCode = generateToolsCode({ tools, lang });
-  await fs.writeFile(path.join(outputDir, `src/tools.${ext}`), toolsCode);
+  await fs.writeFile(path.join(outputDir, `src/tools.${ext}`), generateToolsCode({ tools, lang }));
   files.push(`src/tools.${ext}`);
-
-  // --- API client ---
-  const clientCode = generateApiClient({ api, lang });
-  await fs.writeFile(path.join(outputDir, `src/client.${ext}`), clientCode);
+  await fs.writeFile(path.join(outputDir, `src/client.${ext}`), generateApiClient({ api, lang }));
   files.push(`src/client.${ext}`);
-
-  // --- .env.example ---
-  const envContent = generateEnvExample(api, name);
-  await fs.writeFile(path.join(outputDir, '.env.example'), envContent);
+  await fs.writeFile(path.join(outputDir, '.env.example'), generateEnvExample(api, name));
   files.push('.env.example');
-
-  // --- .gitignore ---
   await fs.writeFile(path.join(outputDir, '.gitignore'), 'node_modules/\ndist/\n.env\n');
   files.push('.gitignore');
-
-  // --- README ---
-  const readme = generateReadme({ name, api, tools, lang });
-  await fs.writeFile(path.join(outputDir, 'README.md'), readme);
+  await fs.writeFile(path.join(outputDir, 'README.md'), generateReadme({ name, api, tools, lang }));
   files.push('README.md');
 
   return {
@@ -73,117 +53,214 @@ export async function generateFromOpenAPI({ specSource, name, outputDir, lang })
     api,
     tools,
     files,
-    description: api.info?.description || `MCP server for ${api.info?.title || name}`,
+    description: String(api.info?.description || `MCP server for ${api.info?.title || name}`),
     capabilities: inferCapabilities(api),
     baseUrl: getBaseUrl(api),
     authType: inferAuthType(api),
   };
 }
 
-// --- Extract tools from OpenAPI paths ---
 function extractTools(api) {
   const tools = [];
-  const paths = api.paths || {};
-
-  for (const [pathStr, pathItem] of Object.entries(paths)) {
-    const methods = ['get', 'post', 'put', 'patch', 'delete'];
-    for (const method of methods) {
-      const op = pathItem[method];
-      if (!op) continue;
-
-      const toolName = generateToolName(method, pathStr, op.operationId);
-      const description = op.summary || op.description || `${method.toUpperCase()} ${pathStr}`;
-      const params = extractParams(op, pathStr, pathItem.parameters || []);
-
+  for (const [pathValue, pathItem] of Object.entries(api.paths || {})) {
+    if (!pathItem || typeof pathItem !== 'object') continue;
+    for (const method of HTTP_METHODS) {
+      const operation = pathItem[method];
+      if (!operation || typeof operation !== 'object') continue;
+      const { params, bodyType } = extractParams(operation, pathValue, pathItem.parameters || [], api);
+      assignArgumentNames(params);
       tools.push({
-        name: toolName,
+        name: generateToolName(method, pathValue, operation.operationId),
         method: method.toUpperCase(),
-        path: pathStr,
-        description,
+        path: pathValue,
+        description: String(operation.summary || operation.description || `${method.toUpperCase()} ${pathValue}`),
         params,
-        operationId: op.operationId,
-        tags: op.tags || [],
-        deprecated: op.deprecated || false,
+        bodyType,
+        operationId: operation.operationId,
+        tags: operation.tags || [],
+        deprecated: operation.deprecated || false,
       });
     }
   }
 
+  const seen = new Set();
+  for (const tool of tools) {
+    if (!tool.name || seen.has(tool.name)) {
+      throw new Error(`OpenAPI operations produce a duplicate or empty tool name: ${tool.name || '(empty)'}`);
+    }
+    seen.add(tool.name);
+  }
   return tools;
 }
 
-function generateToolName(method, pathStr, operationId) {
+function generateToolName(method, pathValue, operationId) {
   if (operationId) {
-    return operationId.replace(/[^a-zA-Z0-9_]/g, '_').replace(/_+/g, '_').toLowerCase();
+    return String(operationId).replace(/[^a-zA-Z0-9_-]/g, '_').replace(/_+/g, '_').slice(0, 128).toLowerCase();
   }
-  const cleaned = pathStr
+  const cleaned = pathValue
     .replace(/\{([^}]+)\}/g, 'by_$1')
     .replace(/[^a-zA-Z0-9]/g, '_')
     .replace(/_+/g, '_')
     .replace(/^_|_$/g, '');
-  return `${method}_${cleaned}`.toLowerCase();
+  return `${method}_${cleaned}`.slice(0, 128).toLowerCase();
 }
 
-function extractParams(op, pathStr, pathLevelParams = []) {
+function extractParams(operation, pathValue, pathLevelParams, api) {
   const params = [];
-  // OpenAPI allows parameters to be declared on the path item and overridden
-  // by an operation. Resolve both so generated input schemas match the URL.
-  const declaredParams = new Map();
-  for (const p of [...pathLevelParams, ...(op.parameters || [])]) {
-    declaredParams.set(`${p.in}:${p.name}`, p);
-  }
-
-  // Path parameters
-  const pathParams = (pathStr.match(/\{([^}]+)\}/g) || []).map(p => p.slice(1, -1));
-  for (const pName of pathParams) {
-    const declared = declaredParams.get(`path:${pName}`);
-    params.push({
-      name: pName,
-      in: 'path',
-      required: true,
-      type: declared?.schema?.type || 'string',
-      description: declared?.description || `Path parameter: ${pName}`,
-    });
-  }
-
-  // Query parameters
-  for (const p of declaredParams.values()) {
-    if (p.in === 'query') {
-      params.push({
-        name: p.name,
-        in: 'query',
-        required: p.required || false,
-        type: p.schema?.type || 'string',
-        description: p.description || p.name,
-      });
+  const declared = new Map();
+  for (const parameter of [...pathLevelParams, ...(operation.parameters || [])]) {
+    if (parameter && typeof parameter === 'object') {
+      declared.set(`${parameter.in}:${parameter.name}`, parameter);
     }
   }
 
-  // Request body
-  if (op.requestBody) {
-    const content = op.requestBody.content || {};
-    const schema = content['application/json']?.schema;
-    if (schema?.properties) {
-      for (const [propName, propSchema] of Object.entries(schema.properties)) {
-        params.push({
-          name: propName,
-          in: 'body',
-          required: (schema.required || []).includes(propName),
-          type: propSchema.type || 'string',
-          description: propSchema.description || propName,
-        });
+  const pathNames = (pathValue.match(/\{([^}]+)\}/g) || []).map(value => value.slice(1, -1));
+  for (const name of pathNames) {
+    params.push(makeParameter(declared.get(`path:${name}`) || {}, name, 'path', true));
+  }
+  for (const parameter of declared.values()) {
+    if (['query', 'header', 'cookie'].includes(parameter.in)) {
+      params.push(makeParameter(parameter, parameter.name, parameter.in, Boolean(parameter.required)));
+    }
+  }
+
+  let bodyType = 'json';
+  if (operation.requestBody) {
+    const selected = selectRequestContent(operation.requestBody.content || {});
+    if (selected) {
+      bodyType = selected.bodyType;
+      addBodyParams(params, selected.schema, selected.location, Boolean(operation.requestBody.required));
+    }
+  } else {
+    const bodyParam = [...declared.values()].find(parameter => parameter.in === 'body');
+    if (bodyParam) addBodyParams(params, bodyParam.schema || {}, 'body', Boolean(bodyParam.required));
+
+    const formParams = [...declared.values()].filter(parameter => parameter.in === 'formData');
+    if (formParams.length) {
+      const consumes = operation.consumes || api.consumes || [];
+      bodyType = consumes.includes('multipart/form-data') ? 'multipart' : 'form';
+      for (const parameter of formParams) {
+        params.push(makeParameter(parameter, parameter.name, 'form', Boolean(parameter.required)));
       }
     }
   }
-
-  return params;
+  return { params, bodyType };
 }
 
-function generateServerCode({ name, api, tools, lang }) {
+function makeParameter(parameter, name, location, required) {
+  const rawSchema = parameter.schema || {
+    type: parameter.type || 'string',
+    format: parameter.format,
+    items: parameter.items,
+    enum: parameter.enum,
+    default: parameter.default,
+  };
+  return {
+    name,
+    wireName: name,
+    in: location,
+    required,
+    schema: toInputSchema(rawSchema),
+    description: String(parameter.description || name),
+  };
+}
+
+function selectRequestContent(content) {
+  const priorities = [
+    ['application/json', 'json', 'body'],
+    ['multipart/form-data', 'multipart', 'form'],
+    ['application/x-www-form-urlencoded', 'form', 'form'],
+  ];
+  for (const [mediaType, bodyType, location] of priorities) {
+    if (content[mediaType]?.schema) return { schema: content[mediaType].schema, bodyType, location };
+  }
+  return null;
+}
+
+function addBodyParams(params, rawSchema, location, bodyRequired) {
+  const schema = rawSchema || {};
+  if (schema.type === 'object' && schema.properties) {
+    const required = new Set(schema.required || []);
+    for (const [name, propertySchema] of Object.entries(schema.properties)) {
+      params.push({
+        name,
+        wireName: name,
+        in: location,
+        required: required.has(name),
+        schema: toInputSchema(propertySchema),
+        description: String(propertySchema.description || name),
+      });
+    }
+    return;
+  }
+  params.push({
+    name: 'body',
+    wireName: 'body',
+    in: location === 'form' ? 'form_root' : 'body_root',
+    required: bodyRequired,
+    schema: toInputSchema(schema),
+    description: String(schema.description || 'Request body'),
+  });
+}
+
+function assignArgumentNames(params) {
+  const counts = new Map();
+  for (const parameter of params) counts.set(parameter.name, (counts.get(parameter.name) || 0) + 1);
+  for (const parameter of params) {
+    parameter.argName = counts.get(parameter.name) > 1 ? `${parameter.in}_${parameter.name}` : parameter.name;
+  }
+}
+
+function toInputSchema(schema, seen = new WeakSet(), depth = 0) {
+  if (!schema || typeof schema !== 'object') return { type: 'string' };
+  if (seen.has(schema) || depth > 12) return { type: 'object' };
+  seen.add(schema);
+  const result = {};
+  const scalarKeys = [
+    'type', 'format', 'description', 'title', 'default', 'enum', 'const',
+    'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'minLength',
+    'maxLength', 'pattern', 'minItems', 'maxItems', 'uniqueItems',
+    'minProperties', 'maxProperties', 'readOnly', 'writeOnly',
+  ];
+  for (const key of scalarKeys) if (schema[key] !== undefined) result[key] = schema[key];
+  if (result.type === 'file') {
+    result.type = 'string';
+    result.format = 'binary';
+  }
+  if (!result.type && !schema.oneOf && !schema.anyOf && !schema.allOf) {
+    result.type = schema.properties ? 'object' : 'string';
+  }
+  if (schema.nullable) {
+    const baseType = result.type || 'string';
+    result.type = Array.isArray(baseType) ? [...new Set([...baseType, 'null'])] : [baseType, 'null'];
+  }
+  if (schema.required) result.required = [...schema.required];
+  if (schema.items) result.items = toInputSchema(schema.items, seen, depth + 1);
+  if (schema.properties) {
+    result.properties = Object.fromEntries(Object.entries(schema.properties).map(
+      ([key, value]) => [key, toInputSchema(value, seen, depth + 1)],
+    ));
+  }
+  for (const composition of ['oneOf', 'anyOf', 'allOf']) {
+    if (Array.isArray(schema[composition])) {
+      result[composition] = schema[composition].map(value => toInputSchema(value, seen, depth + 1));
+    }
+  }
+  if (typeof schema.additionalProperties === 'boolean') result.additionalProperties = schema.additionalProperties;
+  else if (schema.additionalProperties) {
+    result.additionalProperties = toInputSchema(schema.additionalProperties, seen, depth + 1);
+  }
+  seen.delete(schema);
+  return result;
+}
+
+function generateServerCode({ name, api, lang }) {
   const ts = lang === 'typescript';
+  const safeName = JSON.stringify(String(name));
   return `${ts ? '// @ts-check\n' : ''}/**
- * ${name} MCP Server
+ * ${safeComment(name)} MCP Server
  * Generated by create-mcp-server — https://agentappstore.dev
- * Based on: ${api.info?.title || name} v${api.info?.version || '1.0.0'}
+ * Based on: ${safeComment(api.info?.title || name)} v${safeComment(api.info?.version || '1.0.0')}
  */
 
 import 'dotenv/config';
@@ -192,27 +269,17 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { tools, callTool } from './tools.js';
 
-const server = new Server(
-  {
-    name: '${name}',
-    version: '0.1.0',
-  },
-  {
-    capabilities: { tools: {} },
-  }
-);
-
+const server = new Server({ name: ${safeName}, version: '0.1.0' }, { capabilities: { tools: {} } });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
-
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-  return callTool(name, args || {});
+  const { name: toolName, arguments: args } = request.params;
+  return callTool(toolName, args || {});
 });
 
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('${name} MCP server running on stdio');
+  console.error(${JSON.stringify(`${name} MCP server running on stdio`)});
 }
 
 main().catch((err) => {
@@ -224,61 +291,46 @@ main().catch((err) => {
 
 function generateToolsCode({ tools, lang }) {
   const ts = lang === 'typescript';
-  const MAX_TOOLS = 50;
-  if (tools.length > MAX_TOOLS) {
-    console.warn(`Warning: API has ${tools.length} endpoints but MCP servers are limited to ${MAX_TOOLS} tools. ${tools.length - MAX_TOOLS} endpoints were omitted.`);
-  }
-  const toolDefs = tools.slice(0, MAX_TOOLS).map(tool => {
+  const toolDefinitions = tools.map(tool => {
     const inputSchema = {
       type: 'object',
-      properties: {},
+      properties: Object.create(null),
       required: [],
     };
-    for (const p of tool.params) {
-      inputSchema.properties[p.name] = {
-        type: p.type === 'integer' ? 'number' : (p.type || 'string'),
-        description: p.description,
-      };
-      if (p.required) inputSchema.required.push(p.name);
+    for (const parameter of tool.params) {
+      inputSchema.properties[parameter.argName] = { ...parameter.schema, description: parameter.description };
+      if (parameter.required) inputSchema.required.push(parameter.argName);
     }
-
     return `  {
     name: ${JSON.stringify(tool.name)},
     description: ${JSON.stringify(tool.description)},
-    inputSchema: ${JSON.stringify(inputSchema, null, 6).replace(/^/gm, '    ').trim()},
+    inputSchema: ${JSON.stringify(inputSchema, null, 4).replace(/^/gm, '    ').trim()},
   }`;
   });
-
-  const callCases = tools.slice(0, MAX_TOOLS).map(tool => {
-    const pathWithParams = tool.path.replace(
-      /\{([^}]+)\}/g,
-      (_, name) => '${encodeURIComponent(String(args[' + JSON.stringify(name) + ']))}'
-    );
-    const queryParams = tool.params.filter(p => p.in === 'query');
-    const bodyParams = tool.params.filter(p => p.in === 'body');
-    const bodyParamNames = JSON.stringify(bodyParams.map(p => p.name));
-
-    return `    case ${JSON.stringify(tool.name)}: {
-      ${queryParams.length ? `const query = new URLSearchParams(${JSON.stringify(queryParams.map(p => p.name))}.filter(k => args[k] != null).reduce((o, k) => ({ ...o, [k]: args[k] }), {}));` : ''}
-      ${bodyParams.length ? `const body = Object.fromEntries(${bodyParamNames}.filter(k => args[k] !== undefined).map(k => [k, args[k]]));` : ''}
-      const res = await apiCall(
-        ${JSON.stringify(tool.method)},
-        \`${pathWithParams}\`${queryParams.length ? ' + (query.toString() ? \'?\' + query : \'\')' : ''},
-        ${bodyParams.length ? 'body' : 'undefined'}
-      );
-      return { content: [{ type: 'text', text: JSON.stringify(res, null, 2) }] };
-    }`;
-  });
-
+  const cases = tools.map(tool => generateCallCase(tool, ts));
   return `import { apiCall } from './client.js';
 
+function appendParam(params${ts ? ': URLSearchParams' : ''}, name${ts ? ': string' : ''}, value${ts ? ': unknown' : ''}) {
+  if (value == null) return;
+  const values = Array.isArray(value) ? value : [value];
+  for (const item of values) params.append(name, typeof item === 'object' ? JSON.stringify(item) : String(item));
+}
+
+function headerValue(value${ts ? ': unknown' : ''})${ts ? ': string' : ''} {
+  return typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
+
+function compactObject(entries${ts ? ': [string, unknown][]' : ''})${ts ? ': Record<string, unknown>' : ''} {
+  return Object.fromEntries(entries.filter(([, value]) => value !== undefined));
+}
+
 export const tools = [
-${toolDefs.join(',\n')}
+${toolDefinitions.join(',\n')}
 ];
 
 export async function callTool(name${ts ? ': string' : ''}, args${ts ? ': Record<string, unknown>' : ''}) {
   switch (name) {
-${callCases.join('\n')}
+${cases.join('\n')}
     default:
       throw new Error(\`Unknown tool: \${name}\`);
   }
@@ -286,93 +338,156 @@ ${callCases.join('\n')}
 `;
 }
 
+function generateCallCase(tool, ts) {
+  const pathMap = Object.fromEntries(tool.params.filter(param => param.in === 'path').map(param => [param.wireName, param.argName]));
+  const queryParams = tool.params.filter(param => param.in === 'query');
+  const headerParams = tool.params.filter(param => param.in === 'header');
+  const cookieParams = tool.params.filter(param => param.in === 'cookie');
+  const bodyParams = tool.params.filter(param => param.in === 'body');
+  const rootBody = tool.params.find(param => param.in === 'body_root');
+  const formParams = tool.params.filter(param => param.in === 'form');
+  const rootForm = tool.params.find(param => param.in === 'form_root');
+
+  const queryLines = queryParams.map(param => `      appendParam(query, ${JSON.stringify(param.wireName)}, args[${JSON.stringify(param.argName)}]);`).join('\n');
+  const headerLines = headerParams.map(param => `      if (args[${JSON.stringify(param.argName)}] != null) requestHeaders[${JSON.stringify(param.wireName)}] = headerValue(args[${JSON.stringify(param.argName)}]);`).join('\n');
+  const cookieLines = cookieParams.map(param => `      if (args[${JSON.stringify(param.argName)}] != null) cookies.push(encodeURIComponent(${JSON.stringify(param.wireName)}) + '=' + encodeURIComponent(headerValue(args[${JSON.stringify(param.argName)}])));`).join('\n');
+
+  let bodyExpression = 'undefined';
+  if (rootBody) bodyExpression = `args[${JSON.stringify(rootBody.argName)}]`;
+  else if (bodyParams.length) {
+    bodyExpression = objectFromParams(bodyParams);
+  } else if (rootForm) bodyExpression = `args[${JSON.stringify(rootForm.argName)}]`;
+  else if (formParams.length) {
+    bodyExpression = objectFromParams(formParams);
+  }
+
+  return `    case ${JSON.stringify(tool.name)}: {
+      const pathArgs${ts ? ': Record<string, string>' : ''} = ${JSON.stringify(pathMap)};
+      const requestPath = ${JSON.stringify(tool.path)}.replace(
+        /\\{([^}]+)\\}/g,
+        (${ts ? '_: string, key: string' : '_, key'}) => encodeURIComponent(String(args[pathArgs[key] || key])),
+      );
+      const query = new URLSearchParams();
+${queryLines}
+      const requestHeaders${ts ? ': Record<string, string>' : ''} = Object.create(null);
+${headerLines}
+      const cookies${ts ? ': string[]' : ''} = [];
+${cookieLines}
+      if (cookies.length) requestHeaders.Cookie = cookies.join('; ');
+      const body = ${bodyExpression};
+      const res = await apiCall(
+        ${JSON.stringify(tool.method)},
+        requestPath + (query.toString() ? '?' + query : ''),
+        { body, headers: requestHeaders, bodyType: ${JSON.stringify(tool.bodyType)} },
+      );
+      return { content: [{ type: 'text', text: JSON.stringify(res, null, 2) }] };
+    }`;
+}
+
+function objectFromParams(params) {
+  const entries = params.map(param => `[${JSON.stringify(param.wireName)}, args[${JSON.stringify(param.argName)}]]`);
+  return `compactObject([${entries.join(', ')}])`;
+}
+
 function generateApiClient({ api, lang }) {
   const ts = lang === 'typescript';
   const baseUrl = getBaseUrl(api);
-  const authType = inferAuthType(api);
+  const auth = getAuthConfig(api);
+  const authDeclarations = {
+    api_key: "const API_KEY = process.env.API_KEY || '';",
+    bearer: "const API_TOKEN = process.env.API_TOKEN || '';",
+    oauth2: "const ACCESS_TOKEN = process.env.ACCESS_TOKEN || '';",
+    none: '',
+  }[auth.type];
+
+  let authCode = '';
+  if (auth.type === 'api_key' && auth.in === 'query') {
+    authCode = `  const parsedUrl = new URL(url);\n  parsedUrl.searchParams.set(${JSON.stringify(auth.name)}, API_KEY);\n  url = parsedUrl.toString();`;
+  } else if (auth.type === 'api_key') authCode = `  headers[${JSON.stringify(auth.name)}] = API_KEY;`;
+  else if (auth.type === 'bearer') authCode = "  headers.Authorization = `Bearer ${API_TOKEN}`;";
+  else if (auth.type === 'oauth2') authCode = "  headers.Authorization = `Bearer ${ACCESS_TOKEN}`;";
 
   return `/**
- * API client for ${api.info?.title || 'API'}
- * Base URL: ${baseUrl}
+ * API client for ${safeComment(api.info?.title || 'API')}
+ * Base URL: ${safeComment(baseUrl)}
  */
 
 const BASE_URL = process.env.API_BASE_URL || ${JSON.stringify(baseUrl)};
-${authType === 'api_key' ? "const API_KEY = process.env.API_KEY || '';" : ''}
-${authType === 'bearer' ? "const API_TOKEN = process.env.API_TOKEN || '';" : ''}
+${authDeclarations}
 
 export async function apiCall(
   method${ts ? ': string' : ''},
   path${ts ? ': string' : ''},
-  body${ts ? ': unknown' : ''} = undefined
+  options${ts ? ': { body?: unknown; headers?: Record<string, string>; bodyType?: string }' : ''} = {},
 )${ts ? ': Promise<unknown>' : ''} {
-  const url = BASE_URL.replace(/\\/$/, '') + path;
-
-  const headers${ts ? ': Record<string, string>' : ''} = {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
+  let url = BASE_URL.replace(/\\/$/, '') + path;
+  const { body, headers: extraHeaders = {}, bodyType = 'json' } = options;
+  const headers${ts ? ': Record<string, string>' : ''} = Object.assign(Object.create(null), {
+    Accept: 'application/json',
     'User-Agent': 'mcp-server/0.1.0',
-${authType === 'api_key' ? "    'X-API-Key': API_KEY," : ''}
-${authType === 'bearer' ? "    'Authorization': `Bearer ${API_TOKEN}`," : ''}
-  };
-
-  const res = await fetch(url, {
-    method,
-    headers,
-    body: body != null ? JSON.stringify(body) : undefined,
+    ...extraHeaders,
   });
+${authCode}
 
+  let encodedBody${ts ? ': BodyInit | undefined' : ''};
+  if (body != null && bodyType === 'multipart') {
+    const form = new FormData();
+    for (const [key, value] of bodyEntries(body)) {
+      if (Array.isArray(value)) for (const item of value) form.append(key, String(item));
+      else form.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
+    }
+    encodedBody = form;
+  } else if (body != null && bodyType === 'form') {
+    const form = new URLSearchParams();
+    for (const [key, value] of bodyEntries(body)) {
+      const values = Array.isArray(value) ? value : [value];
+      for (const item of values) form.append(key, String(item));
+    }
+    headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    encodedBody = form;
+  } else if (body != null) {
+    headers['Content-Type'] = 'application/json';
+    encodedBody = JSON.stringify(body);
+  }
+
+  const res = await fetch(url, { method, headers, body: encodedBody });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(\`API error \${res.status}: \${text}\`);
   }
+  const contentType = res.headers.get('content-type') || '';
+  return contentType.includes('application/json') ? res.json() : res.text();
+}
 
-  const ct = res.headers.get('content-type') || '';
-  if (ct.includes('application/json')) {
-    return res.json();
+function bodyEntries(value${ts ? ': unknown' : ''})${ts ? ': [string, unknown][]' : ''} {
+  if (!value || typeof value !== 'object') {
+    throw new TypeError('Form request bodies must be objects');
   }
-  return res.text();
+  return Object.entries(value);
 }
 `;
 }
 
 function generatePackageJson(name, api, lang) {
   const scripts = lang === 'typescript'
-    ? {
-        build: 'tsc',
-        start: 'node dist/index.js',
-        dev: 'tsx src/index.ts',
-      }
-    : {
-        start: 'node src/index.js',
-        dev: 'node --watch src/index.js',
-      };
-
+    ? { build: 'tsc', start: 'node dist/index.js', dev: 'tsx src/index.ts' }
+    : { start: 'node src/index.js', dev: 'node --watch src/index.js' };
   return {
     name,
     version: '0.1.0',
-    description: api.info?.description || `MCP server for ${api.info?.title || name}`,
+    description: String(api.info?.description || `MCP server for ${api.info?.title || name}`),
     type: 'module',
     scripts,
-    dependencies: {
-      '@modelcontextprotocol/sdk': '^1.0.0',
-      'dotenv': '^16.0.0',
-    },
-    devDependencies: lang === 'typescript'
-      ? { typescript: '^5.0.0', tsx: '^4.0.0', '@types/node': '^20.0.0' }
-      : {},
+    dependencies: { '@modelcontextprotocol/sdk': '^1.0.0', dotenv: '^16.0.0' },
+    devDependencies: lang === 'typescript' ? { typescript: '^5.0.0', tsx: '^4.0.0', '@types/node': '^20.0.0' } : {},
   };
 }
 
 function generateTsConfig() {
   return {
     compilerOptions: {
-      target: 'ES2022',
-      module: 'ESNext',
-      moduleResolution: 'bundler',
-      outDir: './dist',
-      rootDir: './src',
-      strict: true,
-      esModuleInterop: true,
+      target: 'ES2022', module: 'ESNext', moduleResolution: 'bundler',
+      outDir: './dist', rootDir: './src', strict: true, esModuleInterop: true,
       skipLibCheck: true,
     },
     include: ['src/**/*'],
@@ -380,24 +495,32 @@ function generateTsConfig() {
 }
 
 function generateEnvExample(api, name) {
-  const authType = inferAuthType(api);
-  const baseUrl = getBaseUrl(api);
+  const auth = getAuthConfig(api);
+  const authLine = {
+    api_key: 'API_KEY=your-api-key-here',
+    bearer: 'API_TOKEN=your-bearer-token-here',
+    oauth2: 'ACCESS_TOKEN=your-oauth-access-token-here',
+    none: '',
+  }[auth.type];
   return [
-    `# ${name} MCP Server — Environment Variables`,
-    `# Copy this to .env and fill in your values`,
+    `# ${singleLine(name)} MCP Server — Environment Variables`,
+    '# Copy this to .env and fill in your values',
     '',
-    `API_BASE_URL=${baseUrl}`,
-    authType === 'api_key' ? 'API_KEY=your-api-key-here' : '',
-    authType === 'bearer' ? 'API_TOKEN=your-bearer-token-here' : '',
-    authType === 'oauth2' ? 'CLIENT_ID=\nCLIENT_SECRET=\nACCESS_TOKEN=' : '',
-  ].filter(Boolean).join('\n');
+    `API_BASE_URL=${JSON.stringify(getBaseUrl(api))}`,
+    authLine,
+  ].filter(Boolean).join('\n') + '\n';
 }
 
 function generateReadme({ name, api, tools, lang }) {
   const entryPoint = lang === 'typescript' ? 'dist/index.js' : 'src/index.js';
-  return `# ${name}
+  const auth = getAuthConfig(api);
+  const envName = { api_key: 'API_KEY', bearer: 'API_TOKEN', oauth2: 'ACCESS_TOKEN', none: null }[auth.type];
+  const configEnv = envName ? `,\n      "env": { ${JSON.stringify(envName)}: "your-credential-here" }` : '';
+  const homepage = markdownUrl(safeHttpUrl(api.info?.['x-homepage']) || '#');
+  const absoluteEntryPoint = `/absolute/path/to/${singleLine(name)}/${entryPoint}`;
+  return `# ${markdownText(name)}
 
-MCP server for [${api.info?.title || name}](${api.info?.['x-homepage'] || '#'}).
+MCP server for [${markdownText(api.info?.title || name)}](${homepage}).
 Generated by [create-mcp-server](https://agentappstore.dev) — Agent App Store.
 
 ## Quick Start
@@ -412,72 +535,105 @@ ${lang === 'typescript' ? 'npm run build\n' : ''}npm run dev
 
 | Tool | Method | Path | Description |
 |------|--------|------|-------------|
-${tools.slice(0, 20).map(t =>
-  `| \`${t.name}\` | ${t.method} | \`${t.path}\` | ${t.description.slice(0, 60)} |`
-).join('\n')}
+${tools.slice(0, 20).map(tool => `| \`${markdownText(tool.name)}\` | ${tool.method} | \`${markdownText(tool.path)}\` | ${markdownText(singleLine(tool.description).slice(0, 60))} |`).join('\n')}
 ${tools.length > 20 ? `\n_...and ${tools.length - 20} more_\n` : ''}
 
 ## Claude Desktop Config
 
-Add to \`~/Library/Application Support/Claude/claude_desktop_config.json\`:
-
 \`\`\`json
 {
   "mcpServers": {
-    "${name}": {
+    ${JSON.stringify(name)}: {
       "command": "node",
-      "args": ["/absolute/path/to/${name}/${entryPoint}"],
-      "env": {
-        "API_KEY": "your-key-here"
-      }
+      "args": [${JSON.stringify(absoluteEntryPoint)}]${configEnv}
     }
   }
 }
 \`\`\`
-
-## Agent Discovery
-
-This server publishes a \`/.well-known/agent.json\` manifest. Any agent can discover its capabilities at that path.
-
-## Published by
-
-[Agent App Store](https://agentappstore.dev) — the protocol-agnostic registry for agentic tools.
 `;
 }
 
 function getBaseUrl(api) {
-  if (api.servers?.[0]?.url) return api.servers[0].url;
-  if (api.host) return `https://${api.host}${api.basePath || ''}`;
+  if (api.servers?.[0]?.url) {
+    const serverUrl = safeHttpUrl(api.servers[0].url);
+    if (serverUrl) return serverUrl.replace(/\/$/, '');
+  }
+  if (api.host) {
+    const swaggerUrl = safeHttpUrl(`${api.schemes?.[0] || 'https'}://${api.host}${api.basePath || ''}`);
+    if (swaggerUrl) return swaggerUrl.replace(/\/$/, '');
+  }
   return 'https://api.example.com';
 }
 
-function inferAuthType(api) {
-  const secSchemes = api.components?.securitySchemes || api.securityDefinitions || {};
-  for (const scheme of Object.values(secSchemes)) {
-    if (scheme.type === 'apiKey') return 'api_key';
-    if (scheme.type === 'oauth2') return 'oauth2';
-    if (scheme.type === 'http' && scheme.scheme === 'bearer') return 'bearer';
+function getAuthConfig(api) {
+  const schemes = api.components?.securitySchemes || api.securityDefinitions || {};
+  const referencedNames = (api.security || []).flatMap(requirement => Object.keys(requirement));
+  const orderedNames = [...new Set([...referencedNames, ...Object.keys(schemes)])];
+  for (const name of orderedNames) {
+    const scheme = schemes[name];
+    if (!scheme) continue;
+    if (scheme.type === 'apiKey') return { type: 'api_key', in: scheme.in || 'header', name: scheme.name || 'X-API-Key' };
+    if (scheme.type === 'http' && String(scheme.scheme).toLowerCase() === 'bearer') return { type: 'bearer', in: 'header', name: 'Authorization' };
+    if (scheme.type === 'oauth2') return { type: 'oauth2', in: 'header', name: 'Authorization' };
   }
-  return 'none';
+  return { type: 'none', in: null, name: null };
+}
+
+function inferAuthType(api) {
+  return getAuthConfig(api).type;
 }
 
 function inferCapabilities(api) {
-  const caps = new Set();
-  const allText = JSON.stringify(api).toLowerCase();
+  const seen = new WeakSet();
+  const allText = JSON.stringify(api, (_key, value) => {
+    if (value && typeof value === 'object') {
+      if (seen.has(value)) return undefined;
+      seen.add(value);
+    }
+    return value;
+  }).toLowerCase();
   const capMap = {
-    'email': ['email', 'mail', 'smtp'],
-    'messaging': ['message', 'chat', 'slack', 'discord'],
+    email: ['email', 'mail', 'smtp'], messaging: ['message', 'chat', 'slack', 'discord'],
     'payment-processing': ['payment', 'charge', 'invoice', 'stripe', 'billing'],
     'order-management': ['order', 'cart', 'checkout'],
     'database-read': ['query', 'search', 'list', 'get'],
     'database-write': ['create', 'update', 'delete', 'post', 'put'],
     'file-read': ['file', 'download', 'document'],
     'file-write': ['upload', 'file', 'attachment'],
-    'monitoring': ['metric', 'alert', 'monitor', 'health'],
-    'analytics': ['analytic', 'report', 'stat', 'insight'],
+    monitoring: ['metric', 'alert', 'monitor', 'health'],
+    analytics: ['analytic', 'report', 'stat', 'insight'],
   };
-  for (const [cap, keywords] of Object.entries(capMap)) {
-    if (keywords.some(k => allText.includes(k))) caps.add(cap);
+  return Object.entries(capMap)
+    .filter(([, keywords]) => keywords.some(keyword => allText.includes(keyword)))
+    .map(([capability]) => capability);
+}
+
+function safeComment(value) {
+  return singleLine(value).replace(/\*\//g, '* /');
+}
+
+function singleLine(value) {
+  return String(value ?? '').replace(/[\r\n\u2028\u2029]+/g, ' ').trim();
+}
+
+function markdownText(value) {
+  return singleLine(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/([\[\]|`])/g, '\\$1');
+}
+
+function markdownUrl(value) {
+  return String(value).replace(/\(/g, '%28').replace(/\)/g, '%29');
+}
+
+function safeHttpUrl(value) {
+  try {
+    const url = new URL(String(value));
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
   }
-  return [...caps];
 }

@@ -7,6 +7,9 @@ on:
     branches: [master]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   # ── Exchange API (Python/FastAPI) ───────────────────────────────────────
   exchange-api:
@@ -32,16 +35,17 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v --tb=short
 
-      - name: Type check (optional)
-        run: |
-          pip install pyright
-          pyright app/ || true
-        continue-on-error: true
+      - name: Type check
+        run: pyright app/
 
   # ── Create MCP Server (Node.js CLI) ─────────────────────────────────────
   create-mcp-server:
-    name: CLI Generator Tests
+    name: CLI Generator Tests (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20, 22]
     defaults:
       run:
         working-directory: create-mcp-server
@@ -52,17 +56,18 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: create-mcp-server/package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
-      # Pass explicit files: `node --test test/` resolves the directory as a
-      # module rather than discovering tests inside it, and fails.
       - name: Run tests
-        run: node --test test/*.js
+        run: npm test
+
+      - name: Audit dependencies
+        run: npm audit
 
   # ── Frontend Validation ─────────────────────────────────────────────────
   frontend:
@@ -72,11 +77,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Validate registry.json
-        run: python -c "import json; json.load(open('registry.json')); print('registry.json is valid JSON')"
+        run: python3 -c "import json; json.load(open('registry.json')); print('registry.json is valid JSON')"
+
+      - name: Verify generated well-known registry is current
+        run: python3 scripts/sync_registry.py --check
 
       - name: Validate schema
-        run: python -c "import json; json.load(open('schema/agent-json/0.1.0.json')); print('Schema is valid JSON')"
+        run: python3 -c "import json; json.load(open('schema/agent-json/0.1.0.json')); print('Schema is valid JSON')"
 
       - name: Check HTML structure
         run: |
@@ -121,12 +134,11 @@ jobs:
           docker compose -f exchange-api/docker-compose.yml logs api
           exit 1
 
-      # /health returns ok even when registry.json is missing, which is exactly
-      # how the empty-registry bug stayed invisible. Assert the registry really
-      # loaded: an empty one 422s every POST /signals and empties the leaderboard.
+      # Assert both health semantics and the canonical registry copy in the
+      # image. /health now fails closed when no tools were loaded.
       - name: Verify registry loaded in container
         run: |
-          count=$(printf '%s' "$HEALTH_BODY" | python -c "import json,sys; print(json.load(sys.stdin)['tools_known'])")
+          count=$(printf '%s' "$HEALTH_BODY" | python3 -c "import json,sys; print(json.load(sys.stdin)['tools_known'])")
           echo "tools_known=$count"
           if [ "$count" -lt 1 ]; then
             echo "FAIL: container started with an empty tool registry."

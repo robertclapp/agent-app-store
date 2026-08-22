@@ -3,12 +3,13 @@ Tests for tool registry loading.
 
 The registry failing to load is a silent, high-impact failure: is_known_tool()
 starts returning False for everything, so POST /signals 422s on every valid
-tool and the leaderboard renders empty — while /health still reports ok. These
+tool and the leaderboard renders empty. `/health` must then fail closed. These
 tests pin down both that it loads and that the fallback is reachable on demand.
 """
 
 import importlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -46,6 +47,13 @@ def test_registry_matches_registry_json(monkeypatch):
     with open(mod._registry_path()) as f:
         expected = {t["id"] for t in json.load(f)["tools"]}
     assert mod.KNOWN_TOOL_IDS == expected
+
+
+def test_public_registry_copy_matches_canonical_source():
+    root = Path(__file__).resolve().parents[2]
+    assert (root / ".well-known/agent-tools.json").read_bytes() == (
+        root / "registry.json"
+    ).read_bytes()
 
 
 def test_is_known_tool_accepts_real_id():
@@ -93,6 +101,24 @@ def test_malformed_registry_falls_back_empty(monkeypatch, tmp_path):
     """Invalid JSON should degrade the same way rather than crash at import."""
     bad = tmp_path / "bad.json"
     bad.write_text("{not valid json")
+
+    mod = _reload_with_env(monkeypatch, bad)
+    assert mod.KNOWN_TOOL_IDS == set()
+
+
+@pytest.mark.parametrize("payload", [[], {"tools": None}, {"tools": [{"id": "x"}]}, {
+    "tools": [{"id": " ", "name": "Blank", "category": "test"}],
+}, {
+    "tools": [
+        {"id": "x", "name": "X", "category": "test"},
+        {"id": "x", "name": "Duplicate", "category": "test"},
+    ]
+}])
+def test_structurally_invalid_registry_falls_back_empty(
+    monkeypatch, tmp_path, payload
+):
+    bad = tmp_path / "bad-shape.json"
+    bad.write_text(json.dumps(payload))
 
     mod = _reload_with_env(monkeypatch, bad)
     assert mod.KNOWN_TOOL_IDS == set()

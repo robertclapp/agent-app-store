@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Query
 from app.models.schemas import WorkflowCreate, WorkflowDetail, WorkflowSummary
 from app.db.database import get_db
 from app.registry import is_known_tool
+from app.rate_limit import enforce_agent_write_rate_limit
 import hashlib, json, uuid
 from datetime import datetime, timezone
 
@@ -28,6 +29,7 @@ async def create_workflow(workflow: WorkflowCreate):
             detail=f"Unknown tool ID(s): {', '.join(unknown_tools)}",
         )
 
+    await enforce_agent_write_rate_limit(workflow.agent_id)
     db = await get_db()
     workflow_id = str(uuid.uuid4())
     agent_hash = hashlib.sha256((workflow.agent_id or "anonymous").encode()).hexdigest()[:32]

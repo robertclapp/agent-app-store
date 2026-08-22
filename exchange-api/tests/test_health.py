@@ -26,6 +26,20 @@ async def test_root_redirects_to_docs(client):
     assert "/docs" in resp.headers.get("location", "")
 
 
+@pytest.mark.asyncio
+async def test_health_is_unhealthy_when_registry_is_empty(client, monkeypatch):
+    import app.main as main_mod
+
+    monkeypatch.setattr(main_mod, "KNOWN_TOOL_IDS", set())
+    resp = await client.get("/health")
+    assert resp.status_code == 503
+    assert resp.json() == {
+        "status": "unhealthy",
+        "version": "0.1.0",
+        "tools_known": 0,
+    }
+
+
 def test_compose_healthcheck_uses_python_runtime():
     """The slim Python image has Python and urllib, but does not install curl."""
     compose_path = Path(__file__).resolve().parents[1] / "docker-compose.yml"

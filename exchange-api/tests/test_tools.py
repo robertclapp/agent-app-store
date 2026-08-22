@@ -63,3 +63,23 @@ async def test_tool_stats_common_partners(client, sample_signal, sample_workflow
     body = resp.json()
     # github-mcp is in the workflow with anthropic-api and slack-mcp
     assert len(body["common_partners"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_latency_and_error_signals_contribute_to_stats(client):
+    latency = await client.post("/api/v1/signals", json={
+        "tool": "github-mcp",
+        "signal": "latency",
+        "context": {"task": "fetch-pr", "latency_ms": 0},
+    })
+    error = await client.post("/api/v1/signals", json={
+        "tool": "github-mcp",
+        "signal": "error",
+        "context": {"task": "fetch-pr", "error": "network failure"},
+    })
+    assert latency.status_code == error.status_code == 200
+
+    body = (await client.get("/api/v1/tools/github-mcp/stats")).json()
+    assert body["avg_latency_ms"] == 0.0
+    assert body["error_rate"] == 1.0
+    assert body["top_tasks"] == ["fetch-pr"]

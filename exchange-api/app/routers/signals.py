@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from app.models.schemas import SignalCreate, SignalResponse
 from app.db.database import get_db
 from app.registry import is_known_tool
+from app.rate_limit import enforce_agent_write_rate_limit
 import hashlib, json, uuid
 from datetime import datetime, timezone
 
@@ -28,6 +29,7 @@ async def create_signal(signal: SignalCreate):
             detail=f"Unknown tool ID: '{signal.tool}'. Check the registry at agentappstore.dev"
         )
 
+    await enforce_agent_write_rate_limit(signal.agent_id)
     db = await get_db()
     signal_id = str(uuid.uuid4())
     agent_hash = hashlib.sha256((signal.agent_id or "anonymous").encode()).hexdigest()[:32]

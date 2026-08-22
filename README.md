@@ -22,6 +22,7 @@ agent-app-store/
 ├── app.js                  # Frontend application logic
 ├── style.css / base.css    # Styling with dark/light themes
 ├── registry.json           # Curated tool registry (18 tools)
+├── scripts/sync_registry.py  # Generates the public well-known registry copy
 ├── SPEC.md                 # /.well-known/agent.json specification
 ├── schema/                 # JSON Schema for agent.json validation
 ├── exchange-api/           # FastAPI knowledge exchange backend
@@ -46,11 +47,13 @@ agent-app-store/
 
 ### Browse the Registry
 
-Open `index.html` in a browser — or serve it:
+Serve the repository over HTTP so the browser can fetch `registry.json`:
 
 ```bash
 npx serve .
 ```
+
+Then open the local URL printed by `serve` (usually `http://localhost:3000`). Opening `index.html` through `file://` does not provide a reliable fetch origin and is unsupported.
 
 ### Run the Knowledge Exchange API
 
@@ -73,16 +76,22 @@ node bin/create-mcp-server.js
 ### Run Tests
 
 ```bash
-# Exchange API
-cd exchange-api
-pip install pytest pytest-asyncio httpx
-pytest tests/ -v
+# Run each command from the repository root.
+(cd exchange-api && pip install -r requirements-dev.txt)
+(cd exchange-api && pytest tests/ -v && pyright app/)
 
 # CLI generators
-cd create-mcp-server
-npm install
-npm test
+(cd create-mcp-server && npm install)
+(cd create-mcp-server && npm test)
+
+# Frontend and registry consistency
+python3 scripts/sync_registry.py --check
+node --test test/frontend.test.js
 ```
+
+Public writes to the Knowledge Exchange are rate-limited in durable SQLite counters by both source IP and optional `agent_id`. Set `WRITE_RATE_LIMIT_PER_MINUTE` to change the default of 100 requests per minute.
+
+`registry.json` is canonical. After editing it, run `python3 scripts/sync_registry.py`; CI rejects a stale `.well-known/agent-tools.json` copy.
 
 ## API Endpoints
 

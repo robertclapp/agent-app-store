@@ -9,10 +9,46 @@ import { spawnSync } from 'node:child_process';
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import Ajv from 'ajv';
+import addFormats from 'ajv-formats';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
 const OUTPUT_DIR = path.join(__dirname, 'output');
+const REPO_ROOT = path.join(__dirname, '..', '..');
+
+async function writeSpec(name, spec) {
+  const file = path.join(FIXTURES_DIR, name);
+  await fs.writeJson(file, spec, { spaces: 2 });
+  return file;
+}
+
+function successfulResponse(payload = { ok: true }) {
+  return {
+    ok: true,
+    headers: { get: () => 'application/json' },
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  };
+}
+
+async function generateJavaScript(specName, spec, projectName = specName.replace(/\.json$/, '')) {
+  const { generateFromOpenAPI } = await import('../src/generators/openapi.js');
+  const specPath = await writeSpec(specName, spec);
+  const outDir = path.join(OUTPUT_DIR, projectName);
+  const meta = await generateFromOpenAPI({
+    specSource: specPath,
+    name: projectName,
+    outputDir: outDir,
+    lang: 'javascript',
+  });
+  return { meta, outDir };
+}
+
+async function importGeneratedTools(outDir) {
+  const toolsUrl = pathToFileURL(path.join(outDir, 'src/tools.js'));
+  return import(`${toolsUrl.href}?test=${Date.now()}-${Math.random()}`);
+}
 
 // ── Fixture: Minimal OpenAPI spec ──────────────────────────────────────────
 
@@ -233,6 +269,319 @@ describe('OpenAPI Generator', () => {
     }
   });
 
+  it('treats malicious OpenAPI metadata and paths as data, not generated code', async () => {
+    delete globalThis.__openapiPwned;
+    const maliciousKey = 'globalThis.__openapiPwned=true';
+    const spec = {
+      openapi: '3.0.0',
+      info: {
+        title: '*/\u2028globalThis.__openapiPwned = true;\u2029/*',
+        version: '1.0.0\n*/ globalThis.__openapiPwned = true; /*',
+        description: '` ${globalThis.__openapiPwned = true}',
+      },
+      servers: [{ url: 'https://api.test.com' }],
+      paths: {
+        [`/probe/\${${maliciousKey}}`]: {
+          get: {
+            operationId: 'probe;globalThis.__openapiPwned=true',
+            summary: '`; globalThis.__openapiPwned = true; //',
+            responses: { '200': { description: 'ok' } },
+          },
+        },
+      },
+    };
+    const maliciousName = "malicious';globalThis.__openapiPwned=true;";
+    const { meta, outDir } = await generateJavaScript('malicious-openapi.json', spec, maliciousName);
+
+    for (const file of ['src/index.js', 'src/client.js', 'src/tools.js']) {
+      const syntax = spawnSync(process.execPath, ['--check', path.join(outDir, file)], { encoding: 'utf8' });
+      assert.equal(syntax.status, 0, `${file}: ${syntax.stderr}`);
+    }
+
+    const requests = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      requests.push({ url, init });
+      return successfulResponse();
+    };
+    try {
+      const { callTool } = await importGeneratedTools(outDir);
+      assert.equal(globalThis.__openapiPwned, undefined);
+      await callTool(meta.tools[0].name, { [maliciousKey]: 'safe' });
+      assert.equal(globalThis.__openapiPwned, undefined);
+      assert.equal(requests.length, 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete globalThis.__openapiPwned;
+    }
+  });
+
+  it('places custom header/query API keys and bearer/OAuth tokens correctly at runtime', async () => {
+    const authCases = [
+      {
+        id: 'header-key',
+        scheme: { type: 'apiKey', in: 'header', name: 'X-Service-Secret' },
+        env: 'API_KEY',
+        assertRequest: request => {
+          assert.equal(request.init.headers['X-Service-Secret'], 'test-secret');
+          assert.doesNotMatch(request.url, /test-secret/);
+        },
+      },
+      {
+        id: 'query-key',
+        scheme: { type: 'apiKey', in: 'query', name: 'access_key' },
+        env: 'API_KEY',
+        assertRequest: request => {
+          assert.equal(new URL(request.url).searchParams.get('access_key'), 'test-secret');
+          assert.equal(request.init.headers['X-API-Key'], undefined);
+        },
+      },
+      {
+        id: 'bearer',
+        scheme: { type: 'http', scheme: 'bearer' },
+        env: 'API_TOKEN',
+        assertRequest: request => assert.equal(request.init.headers.Authorization, 'Bearer test-secret'),
+      },
+      {
+        id: 'oauth',
+        scheme: {
+          type: 'oauth2',
+          flows: { clientCredentials: { tokenUrl: 'https://auth.test/token', scopes: {} } },
+        },
+        env: 'ACCESS_TOKEN',
+        assertRequest: request => assert.equal(request.init.headers.Authorization, 'Bearer test-secret'),
+      },
+    ];
+
+    for (const authCase of authCases) {
+      const spec = {
+        openapi: '3.0.0',
+        info: { title: authCase.id, version: '1.0.0' },
+        servers: [{ url: 'https://api.test.com' }],
+        security: [{ auth: [] }],
+        paths: {
+          '/resource': {
+            get: { operationId: `get-${authCase.id}`, responses: { '200': { description: 'ok' } } },
+          },
+        },
+        components: { securitySchemes: { auth: authCase.scheme } },
+      };
+      const { meta, outDir } = await generateJavaScript(`${authCase.id}.json`, spec, `${authCase.id}-mcp`);
+      const oldValue = process.env[authCase.env];
+      process.env[authCase.env] = 'test-secret';
+      const requests = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (url, init) => {
+        requests.push({ url, init });
+        return successfulResponse();
+      };
+      try {
+        const { callTool } = await importGeneratedTools(outDir);
+        await callTool(meta.tools[0].name, {});
+        assert.equal(requests.length, 1);
+        authCase.assertRequest(requests[0]);
+      } finally {
+        globalThis.fetch = originalFetch;
+        if (oldValue === undefined) delete process.env[authCase.env];
+        else process.env[authCase.env] = oldValue;
+      }
+    }
+  });
+
+  it('supports Swagger 2 body schemas at runtime', async () => {
+    const spec = {
+      swagger: '2.0',
+      info: { title: 'Swagger Body', version: '1.0.0' },
+      host: 'swagger.test',
+      basePath: '/v2',
+      schemes: ['https'],
+      consumes: ['application/json'],
+      paths: {
+        '/records': {
+          post: {
+            operationId: 'createRecord',
+            parameters: [{
+              name: 'payload',
+              in: 'body',
+              required: true,
+              schema: {
+                type: 'object',
+                required: ['profile'],
+                properties: {
+                  profile: {
+                    type: 'object',
+                    required: ['name'],
+                    properties: { name: { type: 'string' } },
+                  },
+                  tags: { type: 'array', items: { type: 'string' } },
+                },
+              },
+            }],
+            responses: { '200': { description: 'ok' } },
+          },
+        },
+      },
+    };
+    const { meta, outDir } = await generateJavaScript('swagger-body.json', spec, 'swagger-body-mcp');
+    const tool = meta.tools[0];
+    assert.equal(tool.params.find(parameter => parameter.name === 'profile').required, true);
+    assert.equal(tool.params.find(parameter => parameter.name === 'profile').schema.properties.name.type, 'string');
+    assert.equal(tool.params.find(parameter => parameter.name === 'tags').schema.items.type, 'string');
+
+    const requests = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      requests.push({ url, init });
+      return successfulResponse();
+    };
+    try {
+      const { callTool } = await importGeneratedTools(outDir);
+      await callTool(tool.name, { profile: { name: 'Ada' }, tags: ['one', 'two'] });
+      assert.equal(requests[0].url, 'https://swagger.test/v2/records');
+      assert.deepEqual(JSON.parse(requests[0].init.body), {
+        profile: { name: 'Ada' },
+        tags: ['one', 'two'],
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('preserves nested/array schemas and sends multipart, header, and cookie inputs', async () => {
+    const spec = {
+      openapi: '3.0.0',
+      info: { title: 'Complex Inputs', version: '1.0.0' },
+      servers: [{ url: 'https://complex.test/api' }],
+      paths: {
+        '/upload/{id}': {
+          post: {
+            operationId: 'uploadRecord',
+            parameters: [
+              { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+              { name: 'tag', in: 'query', schema: { type: 'array', items: { type: 'string' } } },
+              { name: 'token', in: 'header', required: true, schema: { type: 'string' } },
+              { name: 'token', in: 'cookie', required: true, schema: { type: 'string' } },
+            ],
+            requestBody: {
+              required: true,
+              content: {
+                'multipart/form-data': {
+                  schema: {
+                    type: 'object',
+                    required: ['metadata'],
+                    properties: Object.fromEntries([
+                      ['metadata', {
+                        type: 'object',
+                        properties: { owner: { type: 'string' } },
+                        required: ['owner'],
+                      }],
+                      ['labels', { type: 'array', items: { type: 'string' } }],
+                      ['__proto__', { type: 'string' }],
+                    ]),
+                  },
+                },
+              },
+            },
+            responses: { '200': { description: 'ok' } },
+          },
+        },
+        '/bulk': {
+          post: {
+            operationId: 'bulkCreate',
+            requestBody: {
+              required: true,
+              content: {
+                'application/json': {
+                  schema: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      required: ['id'],
+                      properties: { id: { type: 'integer' } },
+                    },
+                  },
+                },
+              },
+            },
+            responses: { '200': { description: 'ok' } },
+          },
+        },
+      },
+    };
+    const { meta, outDir } = await generateJavaScript('complex-inputs.json', spec, 'complex-inputs-mcp');
+    const upload = meta.tools.find(tool => tool.name === 'uploadrecord');
+    const bulk = meta.tools.find(tool => tool.name === 'bulkcreate');
+    assert.equal(upload.bodyType, 'multipart');
+    assert.equal(upload.params.find(parameter => parameter.name === 'metadata').schema.properties.owner.type, 'string');
+    assert.ok(upload.params.some(parameter => parameter.name === '__proto__'));
+    assert.ok(upload.params.some(parameter => parameter.argName === 'header_token'));
+    assert.ok(upload.params.some(parameter => parameter.argName === 'cookie_token'));
+    assert.equal(bulk.params[0].schema.type, 'array');
+    assert.equal(bulk.params[0].schema.items.properties.id.type, 'integer');
+
+    const requests = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      requests.push({ url, init });
+      return successfulResponse();
+    };
+    try {
+      const { callTool } = await importGeneratedTools(outDir);
+      await callTool(upload.name, Object.fromEntries([
+        ['id', 'a/b'],
+        ['tag', ['x', 'y']],
+        ['header_token', 'header-secret'],
+        ['cookie_token', 'cookie secret'],
+        ['metadata', { owner: 'Ada' }],
+        ['labels', ['one', 'two']],
+        ['__proto__', 'ordinary-data'],
+      ]));
+      const uploadUrl = new URL(requests[0].url);
+      assert.equal(uploadUrl.pathname, '/api/upload/a%2Fb');
+      assert.deepEqual(uploadUrl.searchParams.getAll('tag'), ['x', 'y']);
+      assert.equal(requests[0].init.headers.token, 'header-secret');
+      assert.equal(requests[0].init.headers.Cookie, 'token=cookie%20secret');
+      assert.ok(requests[0].init.body instanceof FormData);
+      assert.equal(requests[0].init.body.get('metadata'), JSON.stringify({ owner: 'Ada' }));
+      assert.deepEqual(requests[0].init.body.getAll('labels'), ['one', 'two']);
+      assert.equal(requests[0].init.body.get('__proto__'), 'ordinary-data');
+
+      await callTool(bulk.name, { body: [{ id: 1 }, { id: 2 }] });
+      assert.deepEqual(JSON.parse(requests[1].init.body), [{ id: 1 }, { id: 2 }]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('keeps generated tools, README, and manifest counts consistent at 50 and 51 operations', async () => {
+    const { generateAgentJson } = await import('../src/generators/agent-json.js');
+    for (const count of [50, 51]) {
+      const paths = Object.fromEntries(Array.from({ length: count }, (_, index) => [
+        `/items/${index}`,
+        {
+          get: {
+            operationId: `getItem${index}`,
+            responses: { '200': { description: 'ok' } },
+          },
+        },
+      ]));
+      const spec = {
+        openapi: '3.0.0',
+        info: { title: `${count} tools`, version: '1.0.0' },
+        servers: [{ url: 'https://count.test' }],
+        paths,
+      };
+      const { meta, outDir } = await generateJavaScript(`count-${count}.json`, spec, `count-${count}-mcp`);
+      const generated = await importGeneratedTools(outDir);
+      const manifest = await generateAgentJson({ meta, outputDir: outDir });
+      const readme = await fs.readFile(path.join(outDir, 'README.md'), 'utf8');
+      assert.equal(meta.tools.length, count);
+      assert.equal(generated.tools.length, count);
+      assert.match(readme, new RegExp(`Available Tools \\(${count}\\)`));
+      assert.equal(manifest.tools[0].description, `MCP server with ${count} tools`);
+    }
+  });
+
   it('should generate only working package scripts and compile TypeScript', async () => {
     const { generateFromOpenAPI } = await import('../src/generators/openapi.js');
     const outDir = path.join(OUTPUT_DIR, 'openapi-build-test');
@@ -287,6 +636,7 @@ describe('CLI', () => {
     assert.match(output, /\.well-known\/agent\.json/);
 
     const generatedDir = path.join(outputBase, 'cli-test-mcp');
+    assert.ok(output.includes(`cd '${generatedDir}'`));
     const pkg = await fs.readJson(path.join(generatedDir, 'package.json'));
     assert.deepEqual(Object.keys(pkg.scripts).sort(), ['dev', 'start']);
     assert.ok(await fs.pathExists(path.join(generatedDir, '.well-known/agent.json')));
@@ -303,6 +653,79 @@ describe('CLI', () => {
 
     assert.equal(command.status, 0, `${command.stdout}\n${command.stderr}`);
     assert.match(command.stdout, /Scaffold a production-ready MCP server/);
+  });
+
+  it('rejects invalid flag-supplied names before resolving or writing paths', async () => {
+    const outputBase = path.join(OUTPUT_DIR, 'cli-invalid');
+    await fs.ensureDir(outputBase);
+    for (const name of ['../escape', '.', 'Uppercase', `a${'b'.repeat(214)}`]) {
+      const command = spawnSync(process.execPath, [
+        path.join(__dirname, '..', 'bin/create-mcp-server.js'),
+        '--name', name,
+        '--output', outputBase,
+        '--blank',
+        '--javascript',
+      ], { encoding: 'utf8' });
+      assert.notEqual(command.status, 0, `invalid name unexpectedly accepted: ${name}`);
+      assert.match(`${command.stdout}\n${command.stderr}`, /Server name must be/);
+    }
+    assert.equal(await fs.pathExists(path.join(OUTPUT_DIR, 'escape')), false);
+  });
+
+  it('refuses a non-empty destination unless --force is explicit', async () => {
+    const outputBase = path.join(OUTPUT_DIR, 'cli-force');
+    const destination = path.join(outputBase, 'existing-mcp');
+    const marker = path.join(destination, 'keep-me.txt');
+    await fs.ensureDir(destination);
+    await fs.writeFile(marker, 'preserve this');
+    const args = [
+      path.join(__dirname, '..', 'bin/create-mcp-server.js'),
+      '--name', 'existing-mcp',
+      '--output', outputBase,
+      '--blank',
+      '--javascript',
+    ];
+
+    const refused = spawnSync(process.execPath, args, { encoding: 'utf8' });
+    assert.notEqual(refused.status, 0);
+    assert.match(`${refused.stdout}\n${refused.stderr}`, /Destination is not empty/);
+    assert.equal(await fs.pathExists(path.join(destination, 'package.json')), false);
+
+    const forced = spawnSync(process.execPath, [...args, '--force'], { encoding: 'utf8' });
+    assert.equal(forced.status, 0, `${forced.stdout}\n${forced.stderr}`);
+    assert.equal(await fs.readFile(marker, 'utf8'), 'preserve this');
+    assert.ok(await fs.pathExists(path.join(destination, 'package.json')));
+  });
+
+  it('rejects conflicting mode/language flags and symbolic-link destinations', async () => {
+    const bin = path.join(__dirname, '..', 'bin/create-mcp-server.js');
+    const outputBase = path.join(OUTPUT_DIR, 'cli-conflicts');
+    const conflictCases = [
+      ['--name', 'conflict-mcp', '--output', outputBase, '--blank', '--from-openapi', path.join(FIXTURES_DIR, 'openapi.json')],
+      ['--name', 'conflict-mcp', '--output', outputBase, '--blank', '--typescript', '--javascript'],
+    ];
+    for (const args of conflictCases) {
+      const command = spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8' });
+      assert.notEqual(command.status, 0);
+      assert.match(`${command.stdout}\n${command.stderr}`, /Choose (exactly one|either)/);
+    }
+
+    const target = path.join(OUTPUT_DIR, 'outside-target');
+    const destination = path.join(outputBase, 'linked-mcp');
+    await fs.ensureDir(target);
+    await fs.ensureDir(outputBase);
+    await fs.ensureSymlink(target, destination, 'dir');
+    const linked = spawnSync(process.execPath, [
+      bin,
+      '--name', 'linked-mcp',
+      '--output', outputBase,
+      '--blank',
+      '--javascript',
+      '--force',
+    ], { encoding: 'utf8' });
+    assert.notEqual(linked.status, 0);
+    assert.match(`${linked.stdout}\n${linked.stderr}`, /must not be a symbolic link/);
+    assert.equal(await fs.pathExists(path.join(target, 'package.json')), false);
   });
 });
 
@@ -437,5 +860,92 @@ describe('Agent JSON Generator', () => {
     });
 
     assert.equal(manifest.auth.type, 'none');
+  });
+
+  it('sanitizes untrusted metadata and validates every generated field against the published schema', async () => {
+    const { generateAgentJson } = await import('../src/generators/agent-json.js');
+    const schema = await fs.readJson(path.join(REPO_ROOT, 'schema/agent-json/0.1.0.json'));
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    addFormats(ajv);
+    const validate = ajv.compile(schema);
+    const outDir = path.join(OUTPUT_DIR, 'agent-json-schema-test');
+    const manifest = await generateAgentJson({
+      meta: {
+        name: '../../unsafe;package',
+        description: `description ${'x'.repeat(800)}`,
+        capabilities: ['database-read', 42, null],
+        tools: Array.from({ length: 51 }, (_, index) => ({ name: `tool-${index}` })),
+        authType: 'oauth2',
+        baseUrl: 'https://api.test.com',
+        api: {
+          info: {
+            title: `Very long API ${'x'.repeat(100)}`,
+            version: 'release-next',
+            'x-docs-url': 'javascript:alert(1)',
+          },
+          components: {
+            securitySchemes: {
+              oauth: { type: 'oauth2', flows: { clientCredentials: { scopes: { read: 'Read data' } } } },
+            },
+          },
+        },
+      },
+      outputDir: outDir,
+    });
+
+    assert.equal(validate(manifest), true, JSON.stringify(validate.errors, null, 2));
+    assert.equal(manifest.name.length, 64);
+    assert.equal(manifest.description.length, 500);
+    assert.equal(manifest.version, '0.1.0');
+    assert.deepEqual(manifest.capabilities, ['database-read']);
+    assert.deepEqual(manifest.auth.oauth2, { scopes: { read: 'Read data' } });
+    assert.equal(manifest.tools[0].name, 'generated-mcp');
+    assert.equal(manifest.tools[0].endpoint, 'npx generated-mcp');
+    assert.equal('docs_url' in manifest.tools[1], false);
+    assert.equal(manifest.tools[0].description, 'MCP server with 51 tools');
+  });
+
+  it('maps Swagger 2 OAuth metadata without emitting empty URI fields', async () => {
+    const { generateAgentJson } = await import('../src/generators/agent-json.js');
+    const outDir = path.join(OUTPUT_DIR, 'agent-json-swagger-oauth-test');
+    const manifest = await generateAgentJson({
+      meta: {
+        name: 'swagger-oauth-mcp',
+        authType: 'oauth2',
+        api: {
+          info: { title: 'Swagger OAuth', version: '2.0.0' },
+          securityDefinitions: {
+            oauth: {
+              type: 'oauth2',
+              flow: 'accessCode',
+              authorizationUrl: 'https://auth.test/authorize',
+              tokenUrl: 'https://auth.test/token',
+              scopes: { read: 'Read records' },
+            },
+          },
+        },
+      },
+      outputDir: outDir,
+    });
+    assert.deepEqual(manifest.auth.oauth2, {
+      authorization_url: 'https://auth.test/authorize',
+      token_url: 'https://auth.test/token',
+      scopes: { read: 'Read records' },
+    });
+  });
+});
+
+describe('Package contents', () => {
+  it('ships the CLI README and MIT license in npm pack output', () => {
+    const packed = spawnSync('npm', ['pack', '--dry-run', '--json'], {
+      cwd: path.join(__dirname, '..'),
+      encoding: 'utf8',
+    });
+    assert.equal(packed.status, 0, `${packed.stdout}\n${packed.stderr}`);
+    const report = JSON.parse(packed.stdout);
+    const filenames = new Set(report[0].files.map(file => file.path));
+    assert.ok(filenames.has('README.md'));
+    assert.ok(filenames.has('LICENSE'));
+    assert.ok(filenames.has('bin/create-mcp-server.js'));
   });
 });

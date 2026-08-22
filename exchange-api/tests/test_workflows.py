@@ -32,6 +32,16 @@ async def test_create_workflow_missing_steps(client):
 
 
 @pytest.mark.asyncio
+async def test_create_workflow_rejects_empty_steps(client):
+    resp = await client.post("/api/v1/workflows", json={
+        "name": "Empty Workflow",
+        "goal": "deploy-code",
+        "steps": [],
+    })
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_create_workflow_invalid_success_rate(client, sample_workflow):
     """POST /workflows with success_rate > 1.0 should return 422."""
     sample_workflow["success_rate"] = 1.5

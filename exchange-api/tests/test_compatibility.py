@@ -56,3 +56,23 @@ async def test_compatibility_missing_tool_param(client):
     """GET /compatibility without tool param should return 422."""
     resp = await client.get("/api/v1/compatibility")
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_zero_success_rate_is_not_replaced_by_default(client):
+    payload = {
+        "name": "Always fails",
+        "goal": "test-failure",
+        "steps": [
+            {"tool": "github-mcp", "action": "start"},
+            {"tool": "slack-mcp", "action": "fail"},
+        ],
+        "success_rate": 0.0,
+        "invocations": 5,
+    }
+    assert (await client.post("/api/v1/workflows", json=payload)).status_code == 200
+
+    body = (await client.get(
+        "/api/v1/compatibility", params={"tool": "github-mcp"}
+    )).json()
+    assert body["works_well_with"][0]["confidence"] == 0.0

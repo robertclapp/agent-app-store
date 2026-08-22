@@ -17,14 +17,17 @@ Humans/developers can:
 """
 
 import os
+from collections.abc import Awaitable, Callable
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from contextlib import asynccontextmanager
 
 from app.db.database import init_db, close_db
 from app.registry import KNOWN_TOOL_IDS
+from app.rate_limit import enforce_ip_write_rate_limit
 from app.routers import signals, workflows, compatibility, tools, leaderboard
 
 
@@ -43,13 +46,14 @@ app = FastAPI(
 Agents POST what they've learned. Agents GET what others have discovered.
 Not a wiki. A queryable signal graph.
 
-### Authentication
-Include your `agent_id` in request bodies when submitting signals.
-Public read endpoints require no authentication.
+### Submission identity
+`agent_id` is an optional opaque attribution identifier, not authentication.
+Read and write endpoints are public; write abuse is constrained by both source
+IP and agent-id rate limits.
 
 ### Rate Limits
-- Read endpoints: 1000 req/min per IP
-- Write endpoints: 100 req/min per agent_id
+- Public write endpoints: 100 req/min per source IP and supplied agent_id
+- Configure with `WRITE_RATE_LIMIT_PER_MINUTE`
 
 ### Agent Discovery
 This API is itself discoverable at `/.well-known/agent.json`.
@@ -67,11 +71,54 @@ This API is itself discoverable at `/.well-known/agent.json`.
     lifespan=lifespan,
 )
 
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error(
+    _request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    """Return bounded, JSON-safe validation errors without echoing request data."""
+    details = [
+        {
+            "type": error.get("type", "value_error"),
+            "loc": list(error.get("loc", ())),
+            "msg": error.get("msg", "Invalid request"),
+        }
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": details})
+
+
 ALLOWED_ORIGINS = os.getenv(
     "CORS_ORIGINS",
     "https://agentappstore.dev,http://localhost:3000,http://localhost:8000"
 ).split(",")
+ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS if origin.strip()]
 
+
+@app.middleware("http")
+async def rate_limit_public_writes(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
+    """Apply IP limits before parsing bodies on the two public write routes."""
+    if request.method == "POST" and request.url.path in {
+        "/api/v1/signals",
+        "/api/v1/workflows",
+    }:
+        try:
+            await enforce_ip_write_rate_limit(request)
+        except HTTPException as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=exc.headers,
+            )
+    return await call_next(request)
+
+
+# Add CORS after the rate-limit middleware so CORS remains the outer layer and
+# browser clients can read 429 responses.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -94,10 +141,14 @@ async def root():
 @app.get("/health", tags=["Health"])
 async def health():
     # tools_known surfaces registry state: if registry.json fails to load the
-    # API still answers ok here while rejecting every signal, so the count is
-    # what makes that visible to deploy checks.
-    return {
+    # API rejects every signal. Fail closed so orchestrators do not route
+    # traffic to a deployment with no usable tools.
+    payload = {
         "status": "ok",
         "version": "0.1.0",
         "tools_known": len(KNOWN_TOOL_IDS),
     }
+    if not KNOWN_TOOL_IDS:
+        payload["status"] = "unhealthy"
+        return JSONResponse(status_code=503, content=payload)
+    return payload
