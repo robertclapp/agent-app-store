@@ -40,6 +40,26 @@ async def test_create_workflow_invalid_success_rate(client, sample_workflow):
 
 
 @pytest.mark.asyncio
+async def test_create_workflow_rejects_every_unknown_tool(client, sample_workflow):
+    """Every workflow step must reference the central tool registry."""
+    sample_workflow["steps"].extend([
+        {"tool": "unknown-z", "action": "do_thing"},
+        {"tool": "unknown-a", "action": "do_other_thing"},
+        {"tool": "unknown-z", "action": "repeat"},
+    ])
+
+    resp = await client.post("/api/v1/workflows", json=sample_workflow)
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Unknown tool ID(s): unknown-a, unknown-z"
+
+    # Rejection happens before persistence; a partially valid workflow must
+    # never become discoverable.
+    listed = await client.get("/api/v1/workflows", params={"goal": "deploy-code"})
+    assert listed.json() == []
+
+
+@pytest.mark.asyncio
 async def test_list_workflows_by_goal(client, sample_workflow):
     """GET /workflows?goal=X should return matching workflows."""
     # Create a workflow first

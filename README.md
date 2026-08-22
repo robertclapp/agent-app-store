@@ -81,7 +81,7 @@ pytest tests/ -v
 # CLI generators
 cd create-mcp-server
 npm install
-node --test test/
+npm test
 ```
 
 ## API Endpoints

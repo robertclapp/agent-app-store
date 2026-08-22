@@ -83,6 +83,9 @@ jobs:
           grep -q '<!DOCTYPE html>' index.html && echo 'HTML doctype present'
           grep -q 'lang="en"' index.html && echo 'Language attribute present'
 
+      - name: Run frontend security tests
+        run: node --test test/frontend.test.js
+
   # ── Docker Build ────────────────────────────────────────────────────────
   docker:
     name: Docker Build
@@ -92,25 +95,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Context is the repo root so registry.json is in scope; see Dockerfile.
-      - name: Build Docker image
-        run: docker build -f exchange-api/Dockerfile -t agent-exchange-api .
+      # Exercise the real Compose definition, including its in-container
+      # healthcheck. This catches dependencies (such as curl) that are absent
+      # from python:3.12-slim.
+      - name: Build and start Docker Compose service
+        run: docker compose -f exchange-api/docker-compose.yml up -d --build
 
-      # Poll rather than `sleep 3` — a fixed wait races uvicorn's startup and
-      # makes this job flaky. Dump container logs if it never becomes healthy.
-      - name: Test container starts
+      - name: Wait for Compose healthcheck
         run: |
-          docker run -d --name test-api -p 8000:8000 agent-exchange-api
-          for i in $(seq 1 30); do
-            if body=$(curl -fsS http://localhost:8000/health); then
+          container_id=$(docker compose -f exchange-api/docker-compose.yml ps -q api)
+          for i in $(seq 1 60); do
+            health=$(docker inspect --format '{{.State.Health.Status}}' "$container_id")
+            if [ "$health" = "healthy" ]; then
+              body=$(curl -fsS http://localhost:8000/health)
               echo "container healthy after ${i}s: $body"
               echo "HEALTH_BODY=$body" >> "$GITHUB_ENV"
               exit 0
             fi
+            if [ "$health" = "unhealthy" ]; then
+              break
+            fi
             sleep 1
           done
           echo "container failed to become healthy; logs:"
-          docker logs test-api
+          docker compose -f exchange-api/docker-compose.yml logs api
           exit 1
 
       # /health returns ok even when registry.json is missing, which is exactly
@@ -122,11 +130,11 @@ jobs:
           echo "tools_known=$count"
           if [ "$count" -lt 1 ]; then
             echo "FAIL: container started with an empty tool registry."
-            docker logs test-api
+            docker compose -f exchange-api/docker-compose.yml logs api
             exit 1
           fi
           echo "OK: registry loaded with $count tools."
 
       - name: Stop container
         if: always()
-        run: docker rm -f test-api || true
+        run: docker compose -f exchange-api/docker-compose.yml down -v

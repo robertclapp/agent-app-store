@@ -35,7 +35,7 @@ async def get_compatibility(
            WHERE tools_used LIKE ? AND status = 'active'""",
         (f'%"{tool}"%',)
     ) as cursor:
-        rows = await cursor.fetchall()
+        rows = list(await cursor.fetchall())
 
     if not rows:
         return CompatibilityResponse(

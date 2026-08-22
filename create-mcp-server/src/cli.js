@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { prompt } from 'enquirer';
+import enquirer from 'enquirer';
 import ora from 'ora';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -9,6 +9,7 @@ import { generateFromBlank } from './generators/blank.js';
 import { generateAgentJson } from './generators/agent-json.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const { prompt } = enquirer;
 
 const BANNER = `
 ${chalk.cyan('╔══════════════════════════════════════════╗')}
@@ -132,6 +133,7 @@ export async function run() {
     if (!opts.skipAgentJson) {
       spinner.text = 'Generating /.well-known/agent.json...';
       await generateAgentJson({ meta: serverMeta, outputDir });
+      serverMeta.files.push('.well-known/agent.json');
     }
 
     spinner.succeed(chalk.green('MCP server scaffolded successfully!'));
@@ -143,8 +145,6 @@ export async function run() {
     console.log(`  ${chalk.gray('1.')} ${chalk.cyan(`cd ${opts.name}`)}`);
     console.log(`  ${chalk.gray('2.')} ${chalk.cyan('npm install')}`);
     console.log(`  ${chalk.gray('3.')} ${chalk.cyan('npm run dev')}         ${chalk.gray('# starts MCP server in dev mode')}`);
-    console.log(`  ${chalk.gray('4.')} ${chalk.cyan('npm run validate')}    ${chalk.gray('# validates agent.json against spec')}`);
-    console.log(`  ${chalk.gray('5.')} ${chalk.cyan('npm run publish-to-agentstore')}  ${chalk.gray('# submit to the registry')}`);
     console.log('');
     console.log(`  ${chalk.bold('Files generated:')}`);
     serverMeta.files.forEach(f => {

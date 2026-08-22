@@ -20,6 +20,22 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, ch => map[ch]);
 }
 
+/**
+ * Allows only absolute HTTP(S) links in untrusted registry data.
+ * HTML escaping protects markup, but does not make schemes such as
+ * `javascript:` safe when a value is placed in an href attribute.
+ * @param {unknown} value - Candidate external URL.
+ * @returns {string} A safe external URL, or a non-navigating fallback.
+ */
+function safeExternalUrl(value) {
+  try {
+    const url = new URL(String(value));
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '#';
+  } catch {
+    return '#';
+  }
+}
+
 // --- Theme Toggle ---
 /** Self-invoking function that initialises the dark/light theme toggle button. */
 (function () {
@@ -458,7 +474,7 @@ const response = await fetch(
 
   // CTA
   const cta = document.getElementById('modal-cta');
-  const docsUrl = tool.endpoints.docs || tool.endpoints.base_url || '#';
+  const docsUrl = safeExternalUrl(tool.endpoints.docs || tool.endpoints.base_url);
   cta.innerHTML = `
     <a href="${escapeHtml(docsUrl)}" target="_blank" rel="noopener noreferrer" class="btn-primary">
       <i data-lucide="external-link" style="width:16px;height:16px;"></i>

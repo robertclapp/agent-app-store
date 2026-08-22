@@ -3,9 +3,8 @@
  *
  * Takes an OpenAPI 3.x or Swagger 2.x spec and generates:
  * - A complete MCP server with one tool per API endpoint
- * - TypeScript types from the request/response schemas
- * - Zod validation for all inputs
- * - agent.json manifest
+ * - TypeScript or JavaScript source with JSON Schema tool inputs
+ * - An API client with environment-based authentication
  * - README with usage instructions
  */
 
@@ -46,7 +45,7 @@ export async function generateFromOpenAPI({ specSource, name, outputDir, lang })
   files.push(`src/index.${ext}`);
 
   // --- Tools file ---
-  const toolsCode = generateToolsCode({ api, tools, lang });
+  const toolsCode = generateToolsCode({ tools, lang });
   await fs.writeFile(path.join(outputDir, `src/tools.${ext}`), toolsCode);
   files.push(`src/tools.${ext}`);
 
@@ -65,7 +64,7 @@ export async function generateFromOpenAPI({ specSource, name, outputDir, lang })
   files.push('.gitignore');
 
   // --- README ---
-  const readme = generateReadme({ name, api, tools });
+  const readme = generateReadme({ name, api, tools, lang });
   await fs.writeFile(path.join(outputDir, 'README.md'), readme);
   files.push('README.md');
 
@@ -94,7 +93,7 @@ function extractTools(api) {
 
       const toolName = generateToolName(method, pathStr, op.operationId);
       const description = op.summary || op.description || `${method.toUpperCase()} ${pathStr}`;
-      const params = extractParams(op, pathStr);
+      const params = extractParams(op, pathStr, pathItem.parameters || []);
 
       tools.push({
         name: toolName,
@@ -124,13 +123,19 @@ function generateToolName(method, pathStr, operationId) {
   return `${method}_${cleaned}`.toLowerCase();
 }
 
-function extractParams(op, pathStr) {
+function extractParams(op, pathStr, pathLevelParams = []) {
   const params = [];
+  // OpenAPI allows parameters to be declared on the path item and overridden
+  // by an operation. Resolve both so generated input schemas match the URL.
+  const declaredParams = new Map();
+  for (const p of [...pathLevelParams, ...(op.parameters || [])]) {
+    declaredParams.set(`${p.in}:${p.name}`, p);
+  }
 
   // Path parameters
   const pathParams = (pathStr.match(/\{([^}]+)\}/g) || []).map(p => p.slice(1, -1));
   for (const pName of pathParams) {
-    const declared = (op.parameters || []).find(p => p.name === pName && p.in === 'path');
+    const declared = declaredParams.get(`path:${pName}`);
     params.push({
       name: pName,
       in: 'path',
@@ -141,7 +146,7 @@ function extractParams(op, pathStr) {
   }
 
   // Query parameters
-  for (const p of (op.parameters || [])) {
+  for (const p of declaredParams.values()) {
     if (p.in === 'query') {
       params.push({
         name: p.name,
@@ -181,6 +186,7 @@ function generateServerCode({ name, api, tools, lang }) {
  * Based on: ${api.info?.title || name} v${api.info?.version || '1.0.0'}
  */
 
+import 'dotenv/config';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -216,10 +222,8 @@ main().catch((err) => {
 `;
 }
 
-function generateToolsCode({ api, tools, lang }) {
+function generateToolsCode({ tools, lang }) {
   const ts = lang === 'typescript';
-  const baseUrl = getBaseUrl(api);
-
   const MAX_TOOLS = 50;
   if (tools.length > MAX_TOOLS) {
     console.warn(`Warning: API has ${tools.length} endpoints but MCP servers are limited to ${MAX_TOOLS} tools. ${tools.length - MAX_TOOLS} endpoints were omitted.`);
@@ -246,16 +250,21 @@ function generateToolsCode({ api, tools, lang }) {
   });
 
   const callCases = tools.slice(0, MAX_TOOLS).map(tool => {
-    const pathWithParams = tool.path.replace(/\{([^}]+)\}/g, (_, name) => '${args.' + name + '}');
+    const pathWithParams = tool.path.replace(
+      /\{([^}]+)\}/g,
+      (_, name) => '${encodeURIComponent(String(args[' + JSON.stringify(name) + ']))}'
+    );
     const queryParams = tool.params.filter(p => p.in === 'query');
     const bodyParams = tool.params.filter(p => p.in === 'body');
+    const bodyParamNames = JSON.stringify(bodyParams.map(p => p.name));
 
     return `    case ${JSON.stringify(tool.name)}: {
       ${queryParams.length ? `const query = new URLSearchParams(${JSON.stringify(queryParams.map(p => p.name))}.filter(k => args[k] != null).reduce((o, k) => ({ ...o, [k]: args[k] }), {}));` : ''}
+      ${bodyParams.length ? `const body = Object.fromEntries(${bodyParamNames}.filter(k => args[k] !== undefined).map(k => [k, args[k]]));` : ''}
       const res = await apiCall(
         ${JSON.stringify(tool.method)},
         \`${pathWithParams}\`${queryParams.length ? ' + (query.toString() ? \'?\' + query : \'\')' : ''},
-        ${bodyParams.length ? `{ ${bodyParams.map(p => p.name).join(', ')} }` : 'undefined'}
+        ${bodyParams.length ? 'body' : 'undefined'}
       );
       return { content: [{ type: 'text', text: JSON.stringify(res, null, 2) }] };
     }`;
@@ -294,7 +303,7 @@ ${authType === 'bearer' ? "const API_TOKEN = process.env.API_TOKEN || '';" : ''}
 export async function apiCall(
   method${ts ? ': string' : ''},
   path${ts ? ': string' : ''},
-  body${ts ? '?: unknown' : ''} = undefined
+  body${ts ? ': unknown' : ''} = undefined
 )${ts ? ': Promise<unknown>' : ''} {
   const url = BASE_URL.replace(/\\/$/, '') + path;
 
@@ -332,14 +341,10 @@ function generatePackageJson(name, api, lang) {
         build: 'tsc',
         start: 'node dist/index.js',
         dev: 'tsx src/index.ts',
-        validate: 'node scripts/validate-agent-json.js',
-        'publish-to-agentstore': 'node scripts/publish.js',
       }
     : {
         start: 'node src/index.js',
         dev: 'node --watch src/index.js',
-        validate: 'node scripts/validate-agent-json.js',
-        'publish-to-agentstore': 'node scripts/publish.js',
       };
 
   return {
@@ -388,7 +393,8 @@ function generateEnvExample(api, name) {
   ].filter(Boolean).join('\n');
 }
 
-function generateReadme({ name, api, tools }) {
+function generateReadme({ name, api, tools, lang }) {
+  const entryPoint = lang === 'typescript' ? 'dist/index.js' : 'src/index.js';
   return `# ${name}
 
 MCP server for [${api.info?.title || name}](${api.info?.['x-homepage'] || '#'}).
@@ -399,7 +405,7 @@ Generated by [create-mcp-server](https://agentappstore.dev) — Agent App Store.
 \`\`\`bash
 npm install
 cp .env.example .env   # fill in your API credentials
-npm run dev
+${lang === 'typescript' ? 'npm run build\n' : ''}npm run dev
 \`\`\`
 
 ## Available Tools (${tools.length})
@@ -420,7 +426,7 @@ Add to \`~/Library/Application Support/Claude/claude_desktop_config.json\`:
   "mcpServers": {
     "${name}": {
       "command": "node",
-      "args": ["${name}/src/index.js"],
+      "args": ["/absolute/path/to/${name}/${entryPoint}"],
       "env": {
         "API_KEY": "your-key-here"
       }

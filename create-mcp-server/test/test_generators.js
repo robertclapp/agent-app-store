@@ -5,9 +5,10 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'fs-extra';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
@@ -50,12 +51,12 @@ const MINIMAL_OPENAPI = {
       },
     },
     '/users/{userId}': {
+      parameters: [
+        { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
+      ],
       get: {
         operationId: 'getUser',
         summary: 'Get a user by ID',
-        parameters: [
-          { name: 'userId', in: 'path', required: true, schema: { type: 'string' } },
-        ],
         responses: { '200': { description: 'Success' } },
       },
     },
@@ -189,6 +190,120 @@ describe('OpenAPI Generator', () => {
     assert.equal(pkg.type, 'module');
     assert.ok(pkg.dependencies['@modelcontextprotocol/sdk'], 'Should include MCP SDK');
   });
+
+  it('should execute generated tools with body args and encoded path params', async () => {
+    const { generateFromOpenAPI } = await import('../src/generators/openapi.js');
+    const outDir = path.join(OUTPUT_DIR, 'openapi-runtime-test');
+
+    await generateFromOpenAPI({
+      specSource: path.join(FIXTURES_DIR, 'openapi.json'),
+      name: 'test-runtime-mcp',
+      outputDir: outDir,
+      lang: 'javascript',
+    });
+
+    const requests = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      requests.push({ url, init });
+      return {
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => ({ ok: true }),
+      };
+    };
+
+    try {
+      const toolsUrl = pathToFileURL(path.join(outDir, 'src/tools.js'));
+      const { callTool } = await import(`${toolsUrl.href}?runtime=${Date.now()}`);
+
+      await callTool('createuser', { name: 'Ada', email: 'ada@example.com' });
+      assert.deepEqual(JSON.parse(requests[0].init.body), {
+        name: 'Ada',
+        email: 'ada@example.com',
+      });
+
+      await callTool('getuser', { userId: 'team/a b?#%' });
+      assert.equal(
+        requests[1].url,
+        'https://api.test.com/users/team%2Fa%20b%3F%23%25',
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('should generate only working package scripts and compile TypeScript', async () => {
+    const { generateFromOpenAPI } = await import('../src/generators/openapi.js');
+    const outDir = path.join(OUTPUT_DIR, 'openapi-build-test');
+
+    await generateFromOpenAPI({
+      specSource: path.join(FIXTURES_DIR, 'openapi.json'),
+      name: 'test-build-mcp',
+      outputDir: outDir,
+      lang: 'typescript',
+    });
+
+    const pkg = await fs.readJson(path.join(outDir, 'package.json'));
+    assert.deepEqual(Object.keys(pkg.scripts).sort(), ['build', 'dev', 'start']);
+    assert.ok(!JSON.stringify(pkg.scripts).includes('scripts/'));
+
+    // Reuse this project's installed dependencies to validate the generated
+    // project exactly as `npm run build` will run after `npm install`.
+    await fs.ensureSymlink(
+      path.join(__dirname, '..', 'node_modules'),
+      path.join(outDir, 'node_modules'),
+      'junction',
+    );
+    const build = spawnSync('npm', ['run', 'build', '--', '--pretty', 'false'], {
+      cwd: outDir,
+      encoding: 'utf8',
+    });
+    assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`);
+    assert.ok(await fs.pathExists(path.join(outDir, 'dist/index.js')));
+
+    const readme = await fs.readFile(path.join(outDir, 'README.md'), 'utf8');
+    assert.match(readme, /npm run build/);
+    assert.match(readme, /\/absolute\/path\/to\/test-build-mcp\/dist\/index\.js/);
+  });
+});
+
+// ── CLI Integration Tests ───────────────────────────────────────────────────
+
+describe('CLI', () => {
+  it('should scaffold through the advertised command without phantom scripts', async () => {
+    const outputBase = path.join(OUTPUT_DIR, 'cli-test');
+    const command = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin/create-mcp-server.js'),
+      '--name', 'cli-test-mcp',
+      '--output', outputBase,
+      '--from-openapi', path.join(FIXTURES_DIR, 'openapi.json'),
+      '--javascript',
+    ], { encoding: 'utf8' });
+
+    assert.equal(command.status, 0, `${command.stdout}\n${command.stderr}`);
+    const output = `${command.stdout}\n${command.stderr}`;
+    assert.doesNotMatch(output, /npm run (validate|publish-to-agentstore)/);
+    assert.match(output, /\.well-known\/agent\.json/);
+
+    const generatedDir = path.join(outputBase, 'cli-test-mcp');
+    const pkg = await fs.readJson(path.join(generatedDir, 'package.json'));
+    assert.deepEqual(Object.keys(pkg.scripts).sort(), ['dev', 'start']);
+    assert.ok(await fs.pathExists(path.join(generatedDir, '.well-known/agent.json')));
+  });
+
+  it('should execute the package start script', () => {
+    const binPath = path.join(__dirname, '..', 'bin/create-mcp-server.js');
+    assert.notEqual(fs.statSync(binPath).mode & 0o111, 0, 'Package bin must be executable');
+
+    const command = spawnSync('npm', ['start', '--', '--help'], {
+      cwd: path.join(__dirname, '..'),
+      encoding: 'utf8',
+    });
+
+    assert.equal(command.status, 0, `${command.stdout}\n${command.stderr}`);
+    assert.match(command.stdout, /Scaffold a production-ready MCP server/);
+  });
 });
 
 // ── Blank Generator Tests ──────────────────────────────────────────────────
@@ -212,6 +327,19 @@ describe('Blank Generator', () => {
     const indexContent = await fs.readFile(path.join(outDir, 'src/index.ts'), 'utf-8');
     assert.ok(indexContent.includes('my-test-mcp'), 'Server name should appear in index');
     assert.ok(indexContent.includes("@modelcontextprotocol/sdk"), 'Should import MCP SDK');
+    assert.ok(indexContent.includes("import 'dotenv/config'"), 'Should load the generated .env file');
+
+    await fs.ensureSymlink(
+      path.join(__dirname, '..', 'node_modules'),
+      path.join(outDir, 'node_modules'),
+      'junction',
+    );
+    const build = spawnSync('npm', ['run', 'build', '--', '--pretty', 'false'], {
+      cwd: outDir,
+      encoding: 'utf8',
+    });
+    assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`);
+    assert.ok(await fs.pathExists(path.join(outDir, 'dist/index.js')));
   });
 
   it('should generate a minimal JavaScript MCP server', async () => {
@@ -227,6 +355,10 @@ describe('Blank Generator', () => {
     assert.ok(result.files.includes('src/index.js'));
     assert.ok(result.files.includes('src/tools.js'));
     assert.ok(!result.files.includes('tsconfig.json'), 'JS mode should not generate tsconfig');
+
+    const pkg = await fs.readJson(path.join(outDir, 'package.json'));
+    assert.deepEqual(Object.keys(pkg.scripts).sort(), ['dev', 'start']);
+    assert.ok(await fs.pathExists(path.join(outDir, 'src/index.js')));
   });
 });
 

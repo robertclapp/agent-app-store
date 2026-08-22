@@ -23,7 +23,7 @@ async def get_tool_stats(
         "SELECT signal_type, context, created_at FROM signals WHERE tool = ? ORDER BY created_at DESC",
         (tool_id,)
     ) as cursor:
-        rows = await cursor.fetchall()
+        rows = list(await cursor.fetchall())
 
     if not rows:
         return ToolStats(
