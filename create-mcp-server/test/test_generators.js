@@ -337,6 +337,20 @@ describe('OpenAPI Generator', () => {
         },
       },
       {
+        id: 'cookie-key',
+        scheme: { type: 'apiKey', in: 'cookie', name: 'session' },
+        env: 'API_KEY',
+        // A per-operation cookie parameter must survive alongside the auth
+        // cookie — the client merges into headers.Cookie, never overwrites.
+        parameters: [{ name: 'locale', in: 'cookie', schema: { type: 'string' } }],
+        args: { locale: 'en-US' },
+        assertRequest: request => {
+          assert.equal(request.init.headers.Cookie, 'locale=en-US; session=test-secret');
+          assert.equal(request.init.headers.session, undefined, 'cookie key must not leak into a header of the same name');
+          assert.doesNotMatch(request.url, /test-secret/);
+        },
+      },
+      {
         id: 'bearer',
         scheme: { type: 'http', scheme: 'bearer' },
         env: 'API_TOKEN',
@@ -361,7 +375,11 @@ describe('OpenAPI Generator', () => {
         security: [{ auth: [] }],
         paths: {
           '/resource': {
-            get: { operationId: `get-${authCase.id}`, responses: { '200': { description: 'ok' } } },
+            get: {
+              operationId: `get-${authCase.id}`,
+              ...(authCase.parameters ? { parameters: authCase.parameters } : {}),
+              responses: { '200': { description: 'ok' } },
+            },
           },
         },
         components: { securitySchemes: { auth: authCase.scheme } },
@@ -377,7 +395,7 @@ describe('OpenAPI Generator', () => {
       };
       try {
         const { callTool } = await importGeneratedTools(outDir);
-        await callTool(meta.tools[0].name, {});
+        await callTool(meta.tools[0].name, authCase.args || {});
         assert.equal(requests.length, 1);
         authCase.assertRequest(requests[0]);
       } finally {
@@ -385,6 +403,60 @@ describe('OpenAPI Generator', () => {
         if (oldValue === undefined) delete process.env[authCase.env];
         else process.env[authCase.env] = oldValue;
       }
+    }
+  });
+
+  it('flattens JSON bodies whose schema omits an explicit object type', async () => {
+    const spec = {
+      openapi: '3.0.0',
+      info: { title: 'Implicit Object', version: '1.0.0' },
+      servers: [{ url: 'https://api.test.com' }],
+      paths: {
+        '/notes': {
+          post: {
+            operationId: 'createNote',
+            requestBody: {
+              required: true,
+              content: {
+                'application/json': {
+                  // No `type: 'object'` — valid JSON Schema, and common in the
+                  // wild. Must flatten like an explicit object, not collapse
+                  // to one opaque `body` argument.
+                  schema: {
+                    properties: {
+                      title: { type: 'string' },
+                      starred: { type: 'boolean' },
+                    },
+                    required: ['title'],
+                  },
+                },
+              },
+            },
+            responses: { '201': { description: 'Created' } },
+          },
+        },
+      },
+    };
+    const { meta, outDir } = await generateJavaScript('implicit-object.json', spec, 'implicit-object-mcp');
+    const tool = meta.tools[0];
+    assert.ok(!tool.params.some(parameter => parameter.name === 'body'),
+      'schema with properties but no type must flatten to per-field params');
+    assert.equal(tool.params.find(parameter => parameter.name === 'title').required, true);
+    assert.equal(tool.params.find(parameter => parameter.name === 'starred').required, false);
+
+    const requests = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      requests.push({ url, init });
+      return successfulResponse();
+    };
+    try {
+      const { callTool } = await importGeneratedTools(outDir);
+      await callTool(tool.name, { title: 'Test note', starred: true });
+      assert.equal(requests.length, 1);
+      assert.deepEqual(JSON.parse(requests[0].init.body), { title: 'Test note', starred: true });
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 

@@ -179,7 +179,10 @@ function selectRequestContent(content) {
 
 function addBodyParams(params, rawSchema, location, bodyRequired) {
   const schema = rawSchema || {};
-  if (schema.type === 'object' && schema.properties) {
+  // Match toInputSchema's inference: a schema with properties and no explicit
+  // type is an object, so flatten it to per-field params rather than one
+  // opaque `body` argument.
+  if (schema.properties && (schema.type === 'object' || schema.type === undefined)) {
     const required = new Set(schema.required || []);
     for (const [name, propertySchema] of Object.entries(schema.properties)) {
       params.push({
@@ -403,6 +406,10 @@ function generateApiClient({ api, lang }) {
   let authCode = '';
   if (auth.type === 'api_key' && auth.in === 'query') {
     authCode = `  const parsedUrl = new URL(url);\n  parsedUrl.searchParams.set(${JSON.stringify(auth.name)}, API_KEY);\n  url = parsedUrl.toString();`;
+  } else if (auth.type === 'api_key' && auth.in === 'cookie') {
+    // Merge rather than assign: per-operation cookie parameters arrive in
+    // extraHeaders.Cookie, and this line runs after that spread.
+    authCode = `  headers.Cookie = [headers.Cookie, ${JSON.stringify(`${auth.name}=`)} + encodeURIComponent(API_KEY)].filter(Boolean).join('; ');`;
   } else if (auth.type === 'api_key') authCode = `  headers[${JSON.stringify(auth.name)}] = API_KEY;`;
   else if (auth.type === 'bearer') authCode = "  headers.Authorization = `Bearer ${API_TOKEN}`;";
   else if (auth.type === 'oauth2') authCode = "  headers.Authorization = `Bearer ${ACCESS_TOKEN}`;";

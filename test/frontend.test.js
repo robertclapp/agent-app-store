@@ -99,6 +99,19 @@ test('tool modal never renders a malicious docs scheme as a link', () => {
   assert.doesNotMatch(cta, /javascript:/i);
 });
 
+test('legacy "box" icon alias renders as package and unknown icons fall back', () => {
+  const { context } = loadApp();
+  const resolve = value => vm.runInContext(
+    `resolveIcon(${JSON.stringify(value)})`,
+    context,
+  );
+
+  assert.equal(resolve('box'), 'package', 'registry docker-mcp relies on the box→package alias');
+  assert.equal(resolve('server'), 'server');
+  assert.equal(resolve('not-a-real-icon'), 'box');
+  assert.equal(resolve('constructor'), 'box', 'alias lookup must not hit the prototype chain');
+});
+
 test('HTML uses no inline event handlers and the skip link is CSS-driven', () => {
   assert.doesNotMatch(indexSource, /\son[a-z]+\s*=/i);
   assert.match(indexSource, /class="skip-link"/);

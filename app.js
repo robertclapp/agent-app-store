@@ -79,12 +79,22 @@ const VALID_ICONS = new Set([
 ]);
 
 /**
+ * Registry icon names that render as a different Lucide icon. `box` has meant
+ * the `package` icon since the original ICON_MAP; registry entries rely on it.
+ * A Map (not a plain object) so untrusted names can't hit the prototype chain.
+ */
+const ICON_ALIASES = new Map([
+  ['box', 'package'],
+]);
+
+/**
  * Resolves a tool's logo_icon value to a valid Lucide icon name.
  * @param {string} name - The icon name from the tool data.
  * @returns {string} A valid Lucide icon name, or 'box' as fallback.
  */
 function resolveIcon(name) {
-  return VALID_ICONS.has(name) ? name : 'box';
+  const resolved = ICON_ALIASES.get(name) ?? name;
+  return VALID_ICONS.has(resolved) ? resolved : 'box';
 }
 
 // --- Category Display Names & Colors ---
