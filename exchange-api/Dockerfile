@@ -15,6 +15,13 @@ COPY exchange-api/ .
 COPY registry.json /app/registry.json
 ENV REGISTRY_PATH=/app/registry.json
 
-RUN mkdir -p data
+# Run as a dedicated non-root user. /app/data must be owned by it so SQLite
+# can write; docker-compose mounts a named volume there, which inherits this
+# ownership on first use (a host bind mount would stay root-owned and break).
+RUN useradd --system --uid 10001 appuser \
+    && mkdir -p data \
+    && chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

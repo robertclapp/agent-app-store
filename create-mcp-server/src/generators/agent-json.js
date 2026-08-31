@@ -71,6 +71,15 @@ function buildAuth(authType, api) {
           key_query_param: scheme.name || 'api_key',
         };
       }
+      // Keep in sync with the generated client (openapi.js), which sends
+      // cookie keys in the Cookie header — a manifest that calls this a
+      // plain header would direct consumers to authenticate incorrectly.
+      if (scheme?.in === 'cookie') {
+        return {
+          type: 'api_key',
+          key_cookie: scheme.name || 'api_key',
+        };
+      }
       return {
         type: 'api_key',
         key_header: scheme?.name || 'X-API-Key',

@@ -242,11 +242,7 @@ describe('OpenAPI Generator', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (url, init) => {
       requests.push({ url, init });
-      return {
-        ok: true,
-        headers: { get: () => 'application/json' },
-        json: async () => ({ ok: true }),
-      };
+      return successfulResponse();
     };
 
     try {
@@ -455,6 +451,45 @@ describe('OpenAPI Generator', () => {
       await callTool(tool.name, { title: 'Test note', starred: true });
       assert.equal(requests.length, 1);
       assert.deepEqual(JSON.parse(requests[0].init.body), { title: 'Test note', starred: true });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('handles bodyless responses and malformed security entries', async () => {
+    const spec = {
+      openapi: '3.0.0',
+      info: { title: 'Bodyless', version: '1.0.0' },
+      servers: [{ url: 'https://api.test.com' }],
+      // Untrusted specs can carry junk here; generation must not TypeError.
+      security: [null, 'bogus'],
+      paths: {
+        '/ping': {
+          head: { operationId: 'checkPing', responses: { '200': { description: 'ok' } } },
+          delete: { operationId: 'deletePing', responses: { '204': { description: 'gone' } } },
+        },
+      },
+    };
+    const { meta, outDir } = await generateJavaScript('bodyless.json', spec, 'bodyless-mcp');
+    const headTool = meta.tools.find(tool => tool.method === 'HEAD');
+    const deleteTool = meta.tools.find(tool => tool.method === 'DELETE');
+    assert.ok(headTool && deleteTool);
+
+    const originalFetch = globalThis.fetch;
+    // JSON content-type with an empty body — res.json() would throw here.
+    globalThis.fetch = async (url, init) => ({
+      ok: true,
+      status: init.method === 'DELETE' ? 204 : 200,
+      headers: { get: () => 'application/json' },
+      text: async () => '',
+      json: async () => { throw new SyntaxError('Unexpected end of JSON input'); },
+    });
+    try {
+      const { callTool } = await importGeneratedTools(outDir);
+      const headResult = await callTool(headTool.name, {});
+      assert.match(headResult.content[0].text, /"status": 200/);
+      const deleteResult = await callTool(deleteTool.name, {});
+      assert.match(deleteResult.content[0].text, /"status": 204/);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -767,6 +802,34 @@ describe('CLI', () => {
     assert.equal(forced.status, 0, `${forced.stdout}\n${forced.stderr}`);
     assert.equal(await fs.readFile(marker, 'utf8'), 'preserve this');
     assert.ok(await fs.pathExists(path.join(destination, 'package.json')));
+  });
+
+  it('refuses --force when the destination contains a symbolic link', async () => {
+    const outputBase = path.join(OUTPUT_DIR, 'cli-force-symlink');
+    const destination = path.join(outputBase, 'linked-mcp');
+    const victim = path.join(outputBase, 'victim');
+    const sentinel = path.join(victim, 'do-not-touch.txt');
+    await fs.ensureDir(destination);
+    await fs.ensureDir(victim);
+    await fs.writeFile(sentinel, 'untouched');
+    // src -> ../victim: generation would write straight through the link and
+    // out of the destination directory.
+    await fs.ensureSymlink(victim, path.join(destination, 'src'), 'junction');
+
+    const args = [
+      path.join(__dirname, '..', 'bin/create-mcp-server.js'),
+      '--name', 'linked-mcp',
+      '--output', outputBase,
+      '--blank',
+      '--javascript',
+      '--force',
+    ];
+    const result = spawnSync(process.execPath, args, { encoding: 'utf8' });
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, /contains a symbolic link/);
+    assert.equal(await fs.readFile(sentinel, 'utf8'), 'untouched');
+    assert.equal(await fs.pathExists(path.join(victim, 'index.js')), false,
+      'nothing may be written through the symlink');
   });
 
   it('rejects conflicting mode/language flags and symbolic-link destinations', async () => {

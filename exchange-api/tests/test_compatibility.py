@@ -21,7 +21,8 @@ async def test_compatibility_no_data(client):
 async def test_compatibility_with_workflows(client, sample_workflow):
     """GET /compatibility after workflow submissions should return partners."""
     # Submit workflows that use github-mcp with other tools
-    await client.post("/api/v1/workflows", json=sample_workflow)
+    setup = await client.post("/api/v1/workflows", json=sample_workflow)
+    assert setup.status_code == 200, setup.text
 
     resp = await client.get("/api/v1/compatibility", params={"tool": "github-mcp"})
     assert resp.status_code == 200
@@ -34,7 +35,8 @@ async def test_compatibility_with_workflows(client, sample_workflow):
 @pytest.mark.asyncio
 async def test_compatibility_confidence_range(client, sample_workflow):
     """Confidence scores should be between 0 and 1."""
-    await client.post("/api/v1/workflows", json=sample_workflow)
+    setup = await client.post("/api/v1/workflows", json=sample_workflow)
+    assert setup.status_code == 200, setup.text
 
     resp = await client.get("/api/v1/compatibility", params={"tool": "github-mcp"})
     for entry in resp.json()["works_well_with"]:
@@ -44,7 +46,8 @@ async def test_compatibility_confidence_range(client, sample_workflow):
 @pytest.mark.asyncio
 async def test_compatibility_limit(client, sample_workflow):
     """GET /compatibility with limit should cap results."""
-    await client.post("/api/v1/workflows", json=sample_workflow)
+    setup = await client.post("/api/v1/workflows", json=sample_workflow)
+    assert setup.status_code == 200, setup.text
 
     resp = await client.get("/api/v1/compatibility", params={"tool": "github-mcp", "limit": 1})
     assert resp.status_code == 200

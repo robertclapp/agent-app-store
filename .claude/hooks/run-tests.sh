@@ -21,9 +21,42 @@ file="$(printf '%s' "$payload" | jq -r '.tool_response.filePath // .tool_input.f
 # whether the hook received an absolute or relative path.
 rel="${file#"$REPO_ROOT"/}"
 
+# True only when a failure is a missing *declared dependency* (environment
+# gap — stay silent), never a missing *project module* (real breakage: a
+# broken import in app/ or src/ also prints "No module named"/"Cannot find
+# module", and swallowing it would report success on a failing suite).
+is_env_gap() {
+  local label="$1" output="$2"
+  case "$label" in
+    Python)
+      local missing top
+      missing="$(printf '%s' "$output" \
+        | grep -oE "No module named '[A-Za-z0-9_.]+'" | head -1 \
+        | sed "s/No module named '//;s/'//")"
+      [ -n "$missing" ] || return 1
+      top="${missing%%.*}"
+      # Environment gap only if the module is declared as a dependency
+      # (requirements list dashes where imports use underscores).
+      grep -riqE "^${top//_/[-_]}([=<>~!\[[:space:]]|$)" \
+        "$REPO_ROOT/exchange-api/requirements-dev.txt" \
+        "$REPO_ROOT/exchange-api/requirements.txt" 2>/dev/null
+      ;;
+    Node)
+      # Deps simply not installed. With node_modules present, a resolution
+      # error means broken project code.
+      printf '%s' "$output" | grep -qiE 'cannot find (module|package)' || return 1
+      [ ! -d "$REPO_ROOT/create-mcp-server/node_modules" ]
+      ;;
+    *)
+      # Frontend tests use only node: builtins — never an environment gap.
+      return 1
+      ;;
+  esac
+}
+
 # Run a test suite. Reports failures back to the model via exit 2.
-# Stays silent (exit 0) only when the suite cannot run because a dependency
-# is missing. Usage and collection errors are real failures.
+# Stays silent (exit 0) only when the suite cannot run because a declared
+# dependency is missing. Usage and collection errors are real failures.
 run_suite() {
   local label="$1" dir="$2"
   shift 2
@@ -33,9 +66,7 @@ run_suite() {
 
   [ $status -eq 0 ] && exit 0
 
-  # Node prints a module-resolution error when deps aren't installed.
-  if printf '%s' "$output" \
-      | grep -qiE 'no module named|cannot find (module|package)|ModuleNotFoundError'; then
+  if is_env_gap "$label" "$output"; then
     exit 0
   fi
 

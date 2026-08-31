@@ -580,15 +580,24 @@ function copyToolJSON(toolId) {
   const tool = tools.find(t => t.id === toolId);
   if (!tool) return;
   const json = JSON.stringify(tool, null, 2);
-  navigator.clipboard.writeText(json).then(() => {
+
+  const flash = label => {
     const btn = document.querySelector('#modal-cta .btn-secondary');
-    if (btn) {
-      const orig = btn.innerHTML;
-      btn.innerHTML = '<i data-lucide="check" style="width:16px;height:16px;"></i> Copied';
-      lucide.createIcons();
-      setTimeout(() => { btn.innerHTML = orig; lucide.createIcons(); }, 1500);
-    }
-  }).catch(() => {});
+    if (!btn) return;
+    const orig = btn.innerHTML;
+    btn.innerHTML = `<i data-lucide="check" style="width:16px;height:16px;"></i> ${label}`;
+    lucide.createIcons();
+    setTimeout(() => { btn.innerHTML = orig; lucide.createIcons(); }, 1500);
+  };
+
+  // navigator.clipboard is undefined outside secure contexts (plain HTTP);
+  // calling writeText there throws synchronously, before any .catch attaches.
+  const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
+  if (!clipboard || typeof clipboard.writeText !== 'function') {
+    flash('Clipboard unavailable — use HTTPS');
+    return;
+  }
+  clipboard.writeText(json).then(() => flash('Copied'), () => flash('Copy failed'));
 }
 
 // --- Event Listeners ---

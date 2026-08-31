@@ -81,6 +81,7 @@
         },
         "key_header": { "type": "string" },
         "key_query_param": { "type": "string" },
+        "key_cookie": { "type": "string" },
         "key_prefix": { "type": "string" },
         "key_acquisition_url": { "type": "string", "format": "uri" },
         "oauth2": {

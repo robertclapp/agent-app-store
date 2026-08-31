@@ -462,8 +462,13 @@ ${authCode}
     const text = await res.text().catch(() => '');
     throw new Error(\`API error \${res.status}: \${text}\`);
   }
+  // HEAD and 204 responses carry no body, and some servers send an empty
+  // body with a JSON content-type — res.json() would throw on all of these.
+  if (method === 'HEAD' || res.status === 204) return { status: res.status };
   const contentType = res.headers.get('content-type') || '';
-  return contentType.includes('application/json') ? res.json() : res.text();
+  const text = await res.text();
+  if (!text) return { status: res.status };
+  return contentType.includes('application/json') ? JSON.parse(text) : text;
 }
 
 function bodyEntries(value${ts ? ': unknown' : ''})${ts ? ': [string, unknown][]' : ''} {
@@ -574,7 +579,10 @@ function getBaseUrl(api) {
 
 function getAuthConfig(api) {
   const schemes = api.components?.securitySchemes || api.securityDefinitions || {};
-  const referencedNames = (api.security || []).flatMap(requirement => Object.keys(requirement));
+  // The source document is untrusted: security may be non-array or hold
+  // null/non-object entries, which must not abort generation with a TypeError.
+  const referencedNames = (Array.isArray(api.security) ? api.security : [])
+    .flatMap(requirement => (requirement && typeof requirement === 'object' ? Object.keys(requirement) : []));
   const orderedNames = [...new Set([...referencedNames, ...Object.keys(schemes)])];
   for (const name of orderedNames) {
     const scheme = schemes[name];

@@ -99,6 +99,31 @@ test('tool modal never renders a malicious docs scheme as a link', () => {
   assert.doesNotMatch(cta, /javascript:/i);
 });
 
+test('copyToolJSON degrades cleanly without the Clipboard API and copies with it', async () => {
+  const { context } = loadApp();
+  const btn = { innerHTML: 'Copy JSON' };
+  context.document.querySelector = selector =>
+    (selector === '#modal-cta .btn-secondary' ? btn : null);
+  vm.runInContext(
+    `tools = [{ id: 'demo-tool', name: 'Demo' }];`,
+    context,
+  );
+
+  // No navigator.clipboard (non-secure context): must not throw, must explain.
+  vm.runInContext(`copyToolJSON('demo-tool');`, context);
+  assert.match(btn.innerHTML, /Clipboard unavailable/);
+
+  // With a working Clipboard API: copies the tool JSON and confirms.
+  btn.innerHTML = 'Copy JSON';
+  const written = [];
+  context.navigator = { clipboard: { writeText: text => { written.push(text); return Promise.resolve(); } } };
+  vm.runInContext(`copyToolJSON('demo-tool');`, context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(written.length, 1);
+  assert.equal(JSON.parse(written[0]).id, 'demo-tool');
+  assert.match(btn.innerHTML, /Copied/);
+});
+
 test('legacy "box" icon alias renders as package and unknown icons fall back', () => {
   const { context } = loadApp();
   const resolve = value => vm.runInContext(
