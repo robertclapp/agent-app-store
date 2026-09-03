@@ -576,6 +576,11 @@ function setupFocusTrap(container) {
  * Temporarily updates the button text to indicate success.
  * @param {string} toolId - The unique ID of the tool whose JSON to copy.
  */
+// Shared across copyToolJSON calls so overlapping clicks restore the button's
+// real label rather than a mid-flash one. See flash() below.
+let copyFlashTimer = null;
+let copyFlashOriginal = null;
+
 function copyToolJSON(toolId) {
   const tool = tools.find(t => t.id === toolId);
   if (!tool) return;
@@ -584,10 +589,22 @@ function copyToolJSON(toolId) {
   const flash = label => {
     const btn = document.querySelector('#modal-cta .btn-secondary');
     if (!btn) return;
-    const orig = btn.innerHTML;
+    // Capture the pristine label only when no flash is already running. A
+    // second click inside the 1500ms window would otherwise capture the
+    // flashed text as the thing to restore, leaving the button stuck on it.
+    if (copyFlashTimer !== null) {
+      clearTimeout(copyFlashTimer);
+    } else {
+      copyFlashOriginal = btn.innerHTML;
+    }
     btn.innerHTML = `<i data-lucide="check" style="width:16px;height:16px;"></i> ${label}`;
     lucide.createIcons();
-    setTimeout(() => { btn.innerHTML = orig; lucide.createIcons(); }, 1500);
+    copyFlashTimer = setTimeout(() => {
+      btn.innerHTML = copyFlashOriginal;
+      copyFlashTimer = null;
+      copyFlashOriginal = null;
+      lucide.createIcons();
+    }, 1500);
   };
 
   // navigator.clipboard is undefined outside secure contexts (plain HTTP);

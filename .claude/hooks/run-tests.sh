@@ -35,9 +35,16 @@ is_env_gap() {
         | sed "s/No module named '//;s/'//")"
       [ -n "$missing" ] || return 1
       top="${missing%%.*}"
-      # Environment gap only if the module is declared as a dependency
-      # (requirements list dashes where imports use underscores).
-      grep -riqE "^${top//_/[-_]}([=<>~!\[[:space:]]|$)" \
+      # A module that exists in the source tree is project code, so a failure
+      # to import it is real breakage no matter what requirements say.
+      if [ -e "$REPO_ROOT/exchange-api/$top" ] || [ -e "$REPO_ROOT/exchange-api/$top.py" ]; then
+        return 1
+      fi
+      # Otherwise it is an environment gap only if declared as a dependency.
+      # Requirements use dashes where imports use underscores, and a
+      # distribution is often named python-<module> (python-dotenv -> dotenv).
+      local name="${top//_/[-_]}"
+      grep -riqE "^(python-)?${name}(-python)?([=<>~!\[[:space:]]|$)" \
         "$REPO_ROOT/exchange-api/requirements-dev.txt" \
         "$REPO_ROOT/exchange-api/requirements.txt" 2>/dev/null
       ;;

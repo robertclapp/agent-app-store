@@ -12,6 +12,18 @@ const hookSource = fs.readFileSync(path.join(repoRoot, '.claude/hooks/run-tests.
 const readmeSource = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
 
 function loadApp() {
+  // Controllable timer queue: app.js schedules label restores with setTimeout
+  // and cancels them with clearTimeout, so tests need both plus a way to run
+  // pending callbacks in order.
+  const timers = new Map();
+  let nextTimerId = 1;
+  const runTimers = () => {
+    for (const [id, entry] of [...timers.entries()].sort((a, b) => a[1].at - b[1].at)) {
+      timers.delete(id);
+      entry.fn();
+    }
+  };
+
   const elements = new Map();
   const getElement = id => {
     if (!elements.has(id)) {
@@ -44,10 +56,17 @@ function loadApp() {
     },
     lucide: { createIcons() {} },
     matchMedia: () => ({ matches: false }),
-    setTimeout() {},
+    setTimeout(fn, ms = 0) {
+      const id = nextTimerId++;
+      timers.set(id, { fn, at: ms });
+      return id;
+    },
+    clearTimeout(id) {
+      timers.delete(id);
+    },
   });
   vm.runInContext(appSource, context, { filename: 'app.js' });
-  return { context, getElement };
+  return { context, getElement, runTimers };
 }
 
 test('safeExternalUrl allows only absolute HTTP(S) URLs', () => {
@@ -122,6 +141,29 @@ test('copyToolJSON degrades cleanly without the Clipboard API and copies with it
   assert.equal(written.length, 1);
   assert.equal(JSON.parse(written[0]).id, 'demo-tool');
   assert.match(btn.innerHTML, /Copied/);
+});
+
+test('rapid Copy JSON clicks restore the real label, not a mid-flash one', async () => {
+  // A second click inside the flash window used to capture the already-flashed
+  // text as the label to restore, leaving the button stuck showing "Copied".
+  const { context, runTimers } = loadApp();
+  const btn = { innerHTML: 'Copy JSON' };
+  context.document.querySelector = selector =>
+    (selector === '#modal-cta .btn-secondary' ? btn : null);
+  context.navigator = { clipboard: { writeText: () => Promise.resolve() } };
+  vm.runInContext(`tools = [{ id: 'demo-tool', name: 'Demo' }];`, context);
+
+  vm.runInContext(`copyToolJSON('demo-tool');`, context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(btn.innerHTML, /Copied/);
+
+  // Click again while the first flash is still pending.
+  vm.runInContext(`copyToolJSON('demo-tool');`, context);
+  await new Promise(resolve => setImmediate(resolve));
+
+  runTimers();
+  assert.equal(btn.innerHTML, 'Copy JSON',
+    'the button must return to its original label after overlapping clicks');
 });
 
 test('legacy "box" icon alias renders as package and unknown icons fall back', () => {
