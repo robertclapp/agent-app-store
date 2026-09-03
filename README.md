@@ -65,6 +65,25 @@ uvicorn app.main:app --reload
 
 API docs at http://localhost:8000/docs
 
+Or with Docker:
+
+```bash
+cd exchange-api
+docker compose up -d --build
+```
+
+The database lives in the `exchange-data` named volume (the container runs
+as a non-root user, which a host bind mount would break). **Upgrading from a
+version that mounted `./data`?** Copy the old database in once before
+starting:
+
+```bash
+docker compose create api   # creates the volume without starting the service
+docker run --rm -v exchange-api_exchange-data:/target -v "$PWD/data":/source \
+  alpine cp /source/exchange.db /target/exchange.db
+docker compose up -d
+```
+
 ### Scaffold an MCP Server
 
 ```bash
