@@ -804,7 +804,7 @@ describe('CLI', () => {
     assert.ok(await fs.pathExists(path.join(destination, 'package.json')));
   });
 
-  it('refuses --force when the destination contains a symbolic link', async () => {
+  it('refuses --force when a generated target is a symbolic link', async () => {
     const outputBase = path.join(OUTPUT_DIR, 'cli-force-symlink');
     const destination = path.join(outputBase, 'linked-mcp');
     const victim = path.join(outputBase, 'victim');
@@ -826,10 +826,63 @@ describe('CLI', () => {
     ];
     const result = spawnSync(process.execPath, args, { encoding: 'utf8' });
     assert.notEqual(result.status, 0);
-    assert.match(`${result.stdout}\n${result.stderr}`, /contains a symbolic link/);
+    assert.match(`${result.stdout}\n${result.stderr}`, /Refusing to overwrite .*a symbolic link/s);
     assert.equal(await fs.readFile(sentinel, 'utf8'), 'untouched');
     assert.equal(await fs.pathExists(path.join(victim, 'index.js')), false,
       'nothing may be written through the symlink');
+  });
+
+  it('refuses --force when a generated target is a hard link', async () => {
+    // A hard link is not a symlink: lstat reports isFile(), so an
+    // isSymbolicLink()-only check passes it and the write truncates the
+    // shared inode, destroying a file outside the destination.
+    const outputBase = path.join(OUTPUT_DIR, 'cli-force-hardlink');
+    const destination = path.join(outputBase, 'hard-mcp');
+    const outsider = path.join(outputBase, 'EXTERNAL_secret.txt');
+    await fs.ensureDir(destination);
+    await fs.writeFile(outsider, 'IMPORTANT ORIGINAL CONTENT');
+    await fs.ensureLink(outsider, path.join(destination, 'package.json'));
+
+    const result = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin/create-mcp-server.js'),
+      '--name', 'hard-mcp',
+      '--output', outputBase,
+      '--blank',
+      '--javascript',
+      '--force',
+    ], { encoding: 'utf8' });
+
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, /Refusing to overwrite .*a hard link/s);
+    assert.equal(await fs.readFile(outsider, 'utf8'), 'IMPORTANT ORIGINAL CONTENT',
+      'the hard-linked file outside the destination must be untouched');
+  });
+
+  it('allows --force over a project that has run npm install', async () => {
+    // node_modules/.bin is full of legitimate symlinks; scanning the whole
+    // destination would reject the ordinary regenerate-after-install workflow.
+    const outputBase = path.join(OUTPUT_DIR, 'cli-force-node-modules');
+    const destination = path.join(outputBase, 'installed-mcp');
+    const binDir = path.join(destination, 'node_modules', '.bin');
+    const pkgDist = path.join(destination, 'node_modules', 'tsx', 'dist');
+    await fs.ensureDir(binDir);
+    await fs.ensureDir(pkgDist);
+    await fs.writeFile(path.join(pkgDist, 'cli.mjs'), 'export {};');
+    await fs.ensureSymlink(path.join(pkgDist, 'cli.mjs'), path.join(binDir, 'tsx'));
+
+    const result = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin/create-mcp-server.js'),
+      '--name', 'installed-mcp',
+      '--output', outputBase,
+      '--blank',
+      '--javascript',
+      '--force',
+    ], { encoding: 'utf8' });
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.ok(await fs.pathExists(path.join(destination, 'package.json')));
+    assert.equal(await fs.pathExists(path.join(binDir, 'tsx')), true,
+      'the install tree must be left alone');
   });
 
   it('rejects conflicting mode/language flags and symbolic-link destinations', async () => {

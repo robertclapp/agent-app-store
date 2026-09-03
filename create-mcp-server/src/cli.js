@@ -115,14 +115,16 @@ export async function run() {
   if (!opts.force && await directoryHasEntries(outputDir)) {
     program.error(`Destination is not empty: ${outputDir}\nRe-run with --force to overwrite generated files while preserving unrelated files.`);
   }
-  // With --force, a pre-existing symlink inside the destination (e.g. src or
-  // .well-known pointing elsewhere) would let the generators write through it
-  // to paths outside outputDir. Generated projects never contain symlinks, so
-  // any symlink in the destination is foreign — refuse rather than follow.
+  // With --force we overwrite into an existing directory, so check the paths
+  // the generators actually write: a symlink there would be followed out of
+  // outputDir, and a hard link shares an inode so truncating it destroys the
+  // other name's contents. Only those paths are inspected — scanning the whole
+  // tree would reject every project that has run npm install, since
+  // node_modules/.bin is full of legitimate symlinks.
   if (opts.force) {
-    const symlink = await findSymlinkWithin(outputDir);
-    if (symlink) {
-      program.error(`Destination contains a symbolic link: ${symlink}\nRemove it before re-running with --force — generation will not write through symlinks.`);
+    const unsafe = await findUnsafeTarget(outputDir);
+    if (unsafe) {
+      program.error(`Refusing to overwrite ${unsafe.path}\nIt is ${unsafe.reason}, and writing to it would modify a file outside ${outputDir}.\nRemove it before re-running with --force.`);
     }
   }
   const lang = opts.typescript ? 'typescript' : 'javascript';
@@ -214,34 +216,52 @@ async function isSymbolicLink(destination) {
 }
 
 /**
- * Returns the path of the first symbolic link found anywhere under
- * `directory` (lstat-based, never follows links), or null if none exist.
- * Bounded so a pathological destination cannot stall the CLI.
+ * Every path the generators write, relative to outputDir. Both language
+ * extensions are listed because the destination may hold output from an
+ * earlier run in the other language.
  */
-async function findSymlinkWithin(directory, budget = { entries: 10000 }) {
-  let names;
-  try {
-    names = await fs.readdir(directory);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return null;
-    throw error;
-  }
-  for (const name of names) {
-    if (budget.entries-- <= 0) {
-      throw new Error(`Refusing to scan ${directory}: too many entries to verify safely.`);
-    }
-    const entryPath = path.join(directory, name);
+const GENERATED_PATHS = [
+  '.env.example',
+  '.gitignore',
+  'README.md',
+  'package.json',
+  'tsconfig.json',
+  'src',
+  'src/client.js', 'src/client.ts',
+  'src/index.js', 'src/index.ts',
+  'src/tools.js', 'src/tools.ts',
+  '.well-known',
+  '.well-known/agent.json',
+];
+
+/**
+ * Returns {path, reason} for the first generated target that cannot be safely
+ * overwritten, or null when all are safe. Never follows links (lstat only).
+ *
+ * Rejects two cases, both of which would write outside outputDir:
+ *   - a symbolic link: the write follows it to the target
+ *   - a hard-linked regular file: truncating it destroys the other name's
+ *     contents, since both names share one inode
+ *
+ * This runs before generation, so it cannot close a TOCTOU race against an
+ * attacker who can write into the destination *during* generation; it stops
+ * links already planted in a destination the user chose to --force.
+ */
+async function findUnsafeTarget(outputDir) {
+  for (const relative of GENERATED_PATHS) {
+    const target = path.join(outputDir, relative);
     let stats;
     try {
-      stats = await fs.lstat(entryPath);
+      stats = await fs.lstat(target);
     } catch (error) {
       if (error?.code === 'ENOENT') continue;
       throw error;
     }
-    if (stats.isSymbolicLink()) return entryPath;
-    if (stats.isDirectory()) {
-      const nested = await findSymlinkWithin(entryPath, budget);
-      if (nested) return nested;
+    if (stats.isSymbolicLink()) return { path: target, reason: 'a symbolic link' };
+    // Directories always report nlink >= 2 ('.' plus the parent entry), so the
+    // hard-link test applies to regular files only.
+    if (stats.isFile() && stats.nlink > 1) {
+      return { path: target, reason: `a hard link (${stats.nlink} names share its inode)` };
     }
   }
   return null;

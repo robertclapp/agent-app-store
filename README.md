@@ -78,10 +78,25 @@ version that mounted `./data`?** Copy the old database in once before
 starting:
 
 ```bash
-docker compose create api   # creates the volume without starting the service
-docker run --rm -v exchange-api_exchange-data:/target -v "$PWD/data":/source \
-  alpine cp /source/exchange.db /target/exchange.db
+# Stop the old container first so SQLite checkpoints its WAL into the file.
+docker compose down
+
+# Copy through the api service itself, so the file lands owned by the
+# container's non-root user. Copying with a plain `docker run alpine ...`
+# instead would leave exchange.db owned by root, and the API could not
+# write to it.
+docker compose run --rm --no-deps \
+  -v "$PWD/data":/source:ro --entrypoint sh api \
+  -c 'cp /source/exchange.db /app/data/exchange.db'
+
 docker compose up -d
+```
+
+Confirm the migration worked — `tools_known` should be non-zero and the
+status `ok`:
+
+```bash
+curl -fsS http://localhost:8000/health
 ```
 
 ### Scaffold an MCP Server
