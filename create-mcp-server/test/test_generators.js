@@ -858,6 +858,55 @@ describe('CLI', () => {
       'the hard-linked file outside the destination must be untouched');
   });
 
+  it('guards every path the generators actually write', async () => {
+    // GENERATED_PATHS in cli.js is what --force checks for symlinks and hard
+    // links. If a generator gains a new output file and that list is not
+    // updated, the guard silently stops covering it — this test fails instead.
+    const outputBase = path.join(OUTPUT_DIR, 'cli-path-coverage');
+    const specPath = await writeSpec('coverage-spec.json', {
+      openapi: '3.0.0',
+      info: { title: 'Coverage API', version: '1.0.0' },
+      servers: [{ url: 'https://api.test.com' }],
+      paths: { '/x': { get: { operationId: 'getX', responses: { '200': { description: 'ok' } } } } },
+    });
+    const bin = path.join(__dirname, '..', 'bin/create-mcp-server.js');
+    const modes = [
+      ['--blank', '--javascript', 'cov-a'],
+      ['--blank', '--typescript', 'cov-b'],
+      ['--from-openapi', specPath, '--javascript', 'cov-c'],
+      ['--from-openapi', specPath, '--typescript', 'cov-d'],
+    ];
+
+    const produced = new Set();
+    for (const mode of modes) {
+      const name = mode.pop();
+      const result = spawnSync(process.execPath,
+        [bin, '--name', name, '--output', outputBase, ...mode],
+        { encoding: 'utf8' });
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+      const root = path.join(outputBase, name);
+      const walk = async dir => {
+        for (const entry of await fs.readdir(dir)) {
+          const full = path.join(dir, entry);
+          produced.add(path.relative(root, full).split(path.sep).join('/'));
+          if ((await fs.stat(full)).isDirectory()) await walk(full);
+        }
+      };
+      await walk(root);
+    }
+
+    const cliSource = await fs.readFile(path.join(__dirname, '..', 'src/cli.js'), 'utf8');
+    const declared = new Set(
+      cliSource.match(/const GENERATED_PATHS = \[([\s\S]*?)\];/)[1]
+        .match(/'[^']+'/g).map(entry => entry.slice(1, -1)),
+    );
+
+    const unguarded = [...produced].filter(entry => !declared.has(entry)).sort();
+    assert.deepEqual(unguarded, [],
+      `these generated paths are missing from GENERATED_PATHS in src/cli.js, so --force would not check them: ${unguarded.join(', ')}`);
+  });
+
   it('allows --force over a project that has run npm install', async () => {
     // node_modules/.bin is full of legitimate symlinks; scanning the whole
     // destination would reject the ordinary regenerate-after-install workflow.
