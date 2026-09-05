@@ -1,17 +1,30 @@
-version: "3.9"
-
 services:
   api:
-    build: .
+    # Context is the repo root so registry.json is in scope; see Dockerfile.
+    build:
+      context: ..
+      dockerfile: exchange-api/Dockerfile
     ports:
       - "8000:8000"
     volumes:
-      - ./data:/app/data
+      # Named volume, not a host bind mount: the container runs as a non-root
+      # user, and a bind-mounted host directory would be root-owned, breaking
+      # SQLite writes. The named volume inherits the image's /app/data
+      # ownership on first use. Inspect with `docker volume inspect`.
+      #
+      # UPGRADING from a version that bind-mounted ./data? Your old
+      # exchange.db is still in ./data on the host but no longer mounted —
+      # copy it into the volume once (exact commands in the repo README under
+      # "Run the Knowledge Exchange API") before starting the service.
+      - exchange-data:/app/data
     environment:
       - DATABASE_URL=data/exchange.db
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
+
+volumes:
+  exchange-data:
