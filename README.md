@@ -78,25 +78,29 @@ version that mounted `./data`?** Copy the old database in once before
 starting:
 
 ```bash
-# Stop the old container first so SQLite checkpoints its WAL into the file.
+# Stop the old container first so SQLite has flushed its rollback journal.
 docker compose down
 
-# Copy through the api service itself, so the file lands owned by the
-# container's non-root user. Copying with a plain `docker run alpine ...`
-# instead would leave exchange.db owned by root, and the API could not
-# write to it.
-docker compose run --rm --no-deps \
+# Copy through the api service with --build so the NEW image (non-root
+# user) performs the copy. Without --build, Compose reuses the old root
+# image you already have: the volume is then seeded root-owned and the
+# copied exchange.db is root-owned too, so once the non-root image does
+# run, every write fails with "attempt to write a readonly database".
+# The glob also carries a hot exchange.db-journal if one exists.
+docker compose run --rm --no-deps --build \
   -v "$PWD/data":/source:ro --entrypoint sh api \
-  -c 'cp /source/exchange.db /app/data/exchange.db'
+  -c 'cp /source/exchange.db* /app/data/'
 
-docker compose up -d
+docker compose up -d --build
 ```
 
-Confirm the migration worked — `tools_known` should be non-zero and the
-status `ok`:
+Confirm the migration worked. `/health` probes write access, so a
+root-owned database reports `"database":"readonly"` with HTTP 503 rather
+than a misleading `ok`:
 
 ```bash
 curl -fsS http://localhost:8000/health
+# expect: {"status":"ok", ..., "tools_known":18, "database":"writable"}
 ```
 
 ### Scaffold an MCP Server

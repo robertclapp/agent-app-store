@@ -16,6 +16,52 @@ async def test_health_check(client):
     body = resp.json()
     assert body["status"] == "ok"
     assert "version" in body
+    assert body["database"] == "writable"
+
+
+@pytest.mark.asyncio
+async def test_health_fails_closed_when_database_is_readonly(client, tmp_path):
+    """
+    A database the process cannot write must make /health report 503.
+
+    This is the state a botched volume migration leaves behind: the file is
+    readable, connect succeeds, GET endpoints work, and every POST fails.
+    Before this probe /health said "ok" throughout.
+    """
+    import sqlite3
+    import app.db.database as db_mod
+
+    ro_path = tmp_path / "readonly.db"
+    sqlite3.connect(ro_path).close()
+    original = db_mod.DATABASE_URL
+    # mode=ro is enforced by SQLite itself, so this holds even when the test
+    # process is root and file permission bits would not stop it.
+    db_mod.DATABASE_URL = f"file:{ro_path}?mode=ro"
+    try:
+        resp = await client.get("/health")
+    finally:
+        db_mod.DATABASE_URL = original
+
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["status"] == "unhealthy"
+    assert body["database"] == "readonly"
+
+
+@pytest.mark.asyncio
+async def test_health_fails_closed_when_database_cannot_be_opened(client):
+    """An unopenable DATABASE_URL (missing directory) must also report 503."""
+    import app.db.database as db_mod
+
+    original = db_mod.DATABASE_URL
+    db_mod.DATABASE_URL = "/nonexistent-dir-for-health-test/exchange.db"
+    try:
+        resp = await client.get("/health")
+    finally:
+        db_mod.DATABASE_URL = original
+
+    assert resp.status_code == 503
+    assert resp.json()["database"] == "readonly"
 
 
 @pytest.mark.asyncio
@@ -37,6 +83,7 @@ async def test_health_is_unhealthy_when_registry_is_empty(client, monkeypatch):
         "status": "unhealthy",
         "version": "0.1.0",
         "tools_known": 0,
+        "database": "writable",
     }
 
 

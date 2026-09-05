@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from contextlib import asynccontextmanager
 
-from app.db.database import init_db, close_db
+from app.db.database import init_db, close_db, check_writable
 from app.registry import KNOWN_TOOL_IDS
 from app.rate_limit import enforce_ip_write_rate_limit
 from app.routers import signals, workflows, compatibility, tools, leaderboard
@@ -141,14 +141,18 @@ async def root():
 @app.get("/health", tags=["Health"])
 async def health():
     # tools_known surfaces registry state: if registry.json fails to load the
-    # API rejects every signal. Fail closed so orchestrators do not route
-    # traffic to a deployment with no usable tools.
+    # API rejects every signal. database surfaces write access: a root-owned
+    # file under the non-root container user still serves reads, so a plain
+    # "ok" would let an orchestrator route traffic to a deployment where
+    # every POST fails. Fail closed on either.
+    writable = await check_writable()
     payload = {
         "status": "ok",
         "version": "0.1.0",
         "tools_known": len(KNOWN_TOOL_IDS),
+        "database": "writable" if writable else "readonly",
     }
-    if not KNOWN_TOOL_IDS:
+    if not KNOWN_TOOL_IDS or not writable:
         payload["status"] = "unhealthy"
         return JSONResponse(status_code=503, content=payload)
     return payload

@@ -136,16 +136,25 @@ jobs:
 
       # Assert both health semantics and the canonical registry copy in the
       # image. /health now fails closed when no tools were loaded.
-      - name: Verify registry loaded in container
+      - name: Verify registry loaded and database writable in container
         run: |
           count=$(printf '%s' "$HEALTH_BODY" | python3 -c "import json,sys; print(json.load(sys.stdin)['tools_known'])")
-          echo "tools_known=$count"
+          database=$(printf '%s' "$HEALTH_BODY" | python3 -c "import json,sys; print(json.load(sys.stdin)['database'])")
+          echo "tools_known=$count database=$database"
           if [ "$count" -lt 1 ]; then
             echo "FAIL: container started with an empty tool registry."
             docker compose -f exchange-api/docker-compose.yml logs api
             exit 1
           fi
-          echo "OK: registry loaded with $count tools."
+          # The container runs as a non-root user against a named volume; if
+          # ownership is ever wrong the API serves reads but fails every POST.
+          if [ "$database" != "writable" ]; then
+            echo "FAIL: database is not writable by the container user."
+            docker compose -f exchange-api/docker-compose.yml exec -T api sh -c 'id -u; ls -ln /app/data' || true
+            docker compose -f exchange-api/docker-compose.yml logs api
+            exit 1
+          fi
+          echo "OK: registry loaded with $count tools; database $database."
 
       - name: Stop container
         if: always()
