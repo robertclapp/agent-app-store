@@ -98,8 +98,10 @@ This is enough for an agent to know the service exists, what it does, and who to
   // ── Authentication ─────────────────────────────────────────────────────────
   "auth": {
     "type": "none | api_key | oauth2 | mtls | custom",
-    // For api_key:
-    "key_header": "Authorization",
+    // For api_key. Exactly one of these says where the key is sent:
+    "key_header": "Authorization",      // an HTTP header (key_prefix applies here)
+    // "key_query_param": "api_key",    // a URL query parameter
+    // "key_cookie": "session",         // a cookie name
     "key_prefix": "Bearer",
     "key_acquisition_url": "https://...",
     // For oauth2:

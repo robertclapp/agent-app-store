@@ -2,6 +2,7 @@ from fastapi import APIRouter, Path
 from app.models.schemas import ToolStats
 from app.db.database import get_db
 import json
+import math
 from datetime import datetime, timezone
 from collections import Counter
 
@@ -15,7 +16,7 @@ router = APIRouter()
     description="Returns aggregated reliability, latency, and usage stats for a specific tool built from community-submitted signals.",
 )
 async def get_tool_stats(
-    tool_id: str = Path(..., description="Tool ID", example="github-mcp"),
+    tool_id: str = Path(..., description="Tool ID"),
 ):
     db = await get_db()
 
@@ -23,7 +24,7 @@ async def get_tool_stats(
         "SELECT signal_type, context, created_at FROM signals WHERE tool = ? ORDER BY created_at DESC",
         (tool_id,)
     ) as cursor:
-        rows = await cursor.fetchall()
+        rows = list(await cursor.fetchall())
 
     if not rows:
         return ToolStats(
@@ -49,15 +50,26 @@ async def get_tool_stats(
         ctx = json.loads(row["context"])
         sig_type = row["signal_type"]
 
+        task = ctx.get("task")
+        if isinstance(task, str):
+            tasks[task] += 1
+
+        latency = ctx.get("latency_ms")
+        if (
+            isinstance(latency, (int, float))
+            and not isinstance(latency, bool)
+            and math.isfinite(latency)
+            and latency >= 0
+        ):
+            latencies.append(float(latency))
+
         if sig_type == "reliability":
-            if ctx.get("success"):
+            if ctx.get("success") is True:
                 successes += 1
             else:
                 errors += 1
-            if "latency_ms" in ctx:
-                latencies.append(ctx["latency_ms"])
-            if "task" in ctx:
-                tasks[ctx["task"]] += 1
+        elif sig_type == "error":
+            errors += 1
 
         if last_signal is None:
             last_signal = datetime.fromisoformat(row["created_at"])
@@ -91,8 +103,8 @@ async def get_tool_stats(
         tool_id=tool_id,
         total_signals=total,
         success_rate=round(success_rate, 3),
-        avg_latency_ms=round(avg_latency, 1) if avg_latency else None,
-        p95_latency_ms=round(p95_latency, 1) if p95_latency else None,
+        avg_latency_ms=round(avg_latency, 1) if avg_latency is not None else None,
+        p95_latency_ms=round(p95_latency, 1) if p95_latency is not None else None,
         error_rate=round(error_rate, 3),
         top_tasks=[task for task, _ in tasks.most_common(5)],
         common_partners=[tool for tool, _ in partner_counts.most_common(5)],

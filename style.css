@@ -993,3 +993,53 @@
   white-space: nowrap;
   border-width: 0;
 }
+
+/* --- Readiness Toolkit Buttons --- */
+.skip-link {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 999;
+  padding: 8px 16px;
+  background: var(--color-primary);
+  color: white;
+  text-decoration: none;
+  transform: translateY(-110%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.readiness-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  font-size: var(--text-sm);
+  background: var(--color-surface-offset);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  width: 100%;
+  font-family: var(--font-body);
+  transition: background 180ms ease, border-color 180ms ease;
+  text-decoration: none;
+}
+
+.readiness-btn:hover {
+  background: var(--color-surface-dynamic, var(--color-surface));
+}
+
+.readiness-btn-disabled {
+  cursor: default;
+  color: var(--color-text-muted);
+  opacity: 0.72;
+}
+
+.readiness-btn-disabled:hover {
+  background: var(--color-surface-offset);
+}

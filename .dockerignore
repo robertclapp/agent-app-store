@@ -1,0 +1,28 @@
+# The API image builds from the repo root (it needs registry.json), so the
+# whole tree would otherwise be sent as build context. Keep it to what the
+# image actually needs: exchange-api/ and registry.json.
+.git
+.github
+.claude
+.well-known
+
+# Frontend — served separately, not part of the API image.
+app.js
+base.css
+style.css
+index.html
+schema
+SPEC.md
+README.md
+CLAUDE.md
+LICENSE
+
+# Node CLI (30MB+ of node_modules).
+create-mcp-server
+
+# Python/test/local artifacts.
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.env
+exchange-api/data
