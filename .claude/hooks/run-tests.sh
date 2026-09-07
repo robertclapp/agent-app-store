@@ -42,9 +42,10 @@ is_env_gap() {
       fi
       # Otherwise it is an environment gap only if declared as a dependency.
       # Requirements use dashes where imports use underscores, and a
-      # distribution is often named python-<module> (python-dotenv -> dotenv).
+      # distribution is often named python-<module> or py<module>
+      # (python-dotenv -> dotenv, pyyaml -> yaml).
       local name="${top//_/[-_]}"
-      grep -riqE "^(python-)?${name}(-python)?([=<>~!\[[:space:]]|$)" \
+      grep -riqE "^(python-|py)?${name}(-python)?([=<>~!\[[:space:]]|$)" \
         "$REPO_ROOT/exchange-api/requirements-dev.txt" \
         "$REPO_ROOT/exchange-api/requirements.txt" 2>/dev/null
       ;;

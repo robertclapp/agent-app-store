@@ -94,13 +94,16 @@ docker compose run --rm --no-deps --build \
 docker compose up -d --build
 ```
 
-Confirm the migration worked. `/health` probes write access, so a
-root-owned database reports `"database":"readonly"` with HTTP 503 rather
-than a misleading `ok`:
+Confirm the migration worked. `/health` probes write access: a root-owned
+database reports `"database":"readonly"` with HTTP 503 (check ownership of
+`/app/data`), and one that cannot be opened at all reports
+`"unavailable"`. Do not use `curl -f` here — it hides the body on a 503,
+which is exactly when you need to read it:
 
 ```bash
-curl -fsS http://localhost:8000/health
+curl -sS -w '\nHTTP %{http_code}\n' http://localhost:8000/health
 # expect: {"status":"ok", ..., "tools_known":18, "database":"writable"}
+#         HTTP 200
 ```
 
 ### Scaffold an MCP Server

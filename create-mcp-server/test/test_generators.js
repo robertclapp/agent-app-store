@@ -470,28 +470,52 @@ describe('OpenAPI Generator', () => {
         },
       },
     };
+    // GET and PUT exist to reach the branch AFTER the HEAD/204 short-circuit:
+    // a 200 whose body is empty. Without them, reverting the text-based
+    // parsing back to res.json() would leave this test green.
+    spec.paths['/ping'].get = { operationId: 'getPing', responses: { '200': { description: 'ok' } } };
+    spec.paths['/ping'].put = { operationId: 'putPing', responses: { '200': { description: 'ok' } } };
     const { meta, outDir } = await generateJavaScript('bodyless.json', spec, 'bodyless-mcp');
-    const headTool = meta.tools.find(tool => tool.method === 'HEAD');
-    const deleteTool = meta.tools.find(tool => tool.method === 'DELETE');
-    assert.ok(headTool && deleteTool);
+    const toolFor = method => meta.tools.find(tool => tool.method === method);
+    assert.ok(toolFor('HEAD') && toolFor('DELETE') && toolFor('GET') && toolFor('PUT'));
 
     const originalFetch = globalThis.fetch;
-    // JSON content-type with an empty body — res.json() would throw here.
     globalThis.fetch = async (url, init) => ({
       ok: true,
       status: init.method === 'DELETE' ? 204 : 200,
-      headers: { get: () => 'application/json' },
+      // PUT declares text/plain so the empty-body guard is exercised for a
+      // non-JSON content type too; everything else declares JSON with an
+      // empty body, where res.json() would throw.
+      headers: { get: () => (init.method === 'PUT' ? 'text/plain' : 'application/json') },
       text: async () => '',
       json: async () => { throw new SyntaxError('Unexpected end of JSON input'); },
     });
     try {
       const { callTool } = await importGeneratedTools(outDir);
-      const headResult = await callTool(headTool.name, {});
-      assert.match(headResult.content[0].text, /"status": 200/);
-      const deleteResult = await callTool(deleteTool.name, {});
-      assert.match(deleteResult.content[0].text, /"status": 204/);
+      assert.match((await callTool(toolFor('HEAD').name, {})).content[0].text, /"status": 200/);
+      assert.match((await callTool(toolFor('DELETE').name, {})).content[0].text, /"status": 204/);
+      assert.match((await callTool(toolFor('GET').name, {})).content[0].text, /"status": 200/,
+        'a 200 with JSON content-type and an empty body must not throw');
+      assert.match((await callTool(toolFor('PUT').name, {})).content[0].text, /"status": 200/,
+        'an empty non-JSON body reports the status rather than an empty string');
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('tolerates a security block that is not an array', async () => {
+    // SwaggerParser.dereference does not validate, so junk reaches the
+    // generator. A string or object here used to throw at .flatMap.
+    for (const [index, security] of [['bogus'], [{ apiKey: [] }]].entries()) {
+      const spec = {
+        openapi: '3.0.0',
+        info: { title: `Bad Security ${index}`, version: '1.0.0' },
+        servers: [{ url: 'https://api.test.com' }],
+        security: security[0],
+        paths: { '/x': { get: { operationId: `getX${index}`, responses: { '200': { description: 'ok' } } } } },
+      };
+      const { meta } = await generateJavaScript(`bad-security-${index}.json`, spec, `bad-security-${index}-mcp`);
+      assert.equal(meta.authType, 'none');
     }
   });
 
@@ -1097,6 +1121,80 @@ describe('Agent JSON Generator', () => {
     });
 
     assert.equal(manifest.auth.type, 'none');
+  });
+
+  it('keeps the manifest auth block in sync with the generated client', async () => {
+    // The manifest tells consumers how to authenticate; the client is what
+    // the generated server actually does. They must name the same scheme,
+    // the same location and the same key — across the cases that used to
+    // make them diverge.
+    const { generateAgentJson } = await import('../src/generators/agent-json.js');
+    const { getAuthConfig } = await import('../src/generators/openapi.js');
+    const schema = await fs.readJson(path.join(REPO_ROOT, 'schema/agent-json/0.1.0.json'));
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    addFormats(ajv);
+    const validate = ajv.compile(schema);
+
+    const cases = [
+      {
+        id: 'referenced-cookie-wins',
+        schemes: {
+          headerKey: { type: 'apiKey', in: 'header', name: 'X-Key' },
+          cookieKey: { type: 'apiKey', in: 'cookie', name: 'session' },
+        },
+        security: [{ cookieKey: [] }],
+        expect: { key_cookie: 'session' },
+      },
+      {
+        id: 'referenced-header-wins',
+        schemes: {
+          cookieKey: { type: 'apiKey', in: 'cookie', name: 'session' },
+          headerKey: { type: 'apiKey', in: 'header', name: 'X-Key' },
+        },
+        security: [{ headerKey: [] }],
+        expect: { key_header: 'X-Key' },
+      },
+      {
+        id: 'cookie-default-name',
+        schemes: { auth: { type: 'apiKey', in: 'cookie' } },
+        security: [{ auth: [] }],
+        // The same default the client applies — not a second, different one.
+        expect: { key_cookie: 'X-API-Key' },
+      },
+      {
+        id: 'query-non-string-name',
+        schemes: { auth: { type: 'apiKey', in: 'query', name: 123 } },
+        security: [{ auth: [] }],
+        expect: { key_query_param: 'X-API-Key' },
+      },
+      {
+        id: 'header-newline-name',
+        schemes: { auth: { type: 'apiKey', in: 'header', name: 'X-Se\ncret' } },
+        security: [{ auth: [] }],
+        expect: { key_header: 'X-Se cret' },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const spec = {
+        openapi: '3.0.0',
+        info: { title: testCase.id, version: '1.0.0' },
+        servers: [{ url: 'https://api.test.com' }],
+        security: testCase.security,
+        components: { securitySchemes: testCase.schemes },
+        paths: { '/r': { get: { operationId: `get-${testCase.id}`, responses: { '200': { description: 'ok' } } } } },
+      };
+      const { meta, outDir } = await generateJavaScript(`${testCase.id}.json`, spec, `${testCase.id}-mcp`);
+      const manifest = await generateAgentJson({ meta, outputDir: outDir });
+      const client = getAuthConfig(meta.api);
+
+      assert.deepEqual(manifest.auth, { type: 'api_key', ...testCase.expect }, testCase.id);
+      const manifestName = manifest.auth.key_header ?? manifest.auth.key_query_param ?? manifest.auth.key_cookie;
+      assert.equal(manifestName, client.name, `${testCase.id}: manifest must name the key the client sends`);
+      assert.ok(validate(manifest), `${testCase.id}: ${JSON.stringify(validate.errors)}`);
+      const onDisk = await fs.readJson(path.join(outDir, '.well-known/agent.json'));
+      assert.deepEqual(onDisk.auth, manifest.auth, `${testCase.id}: on-disk manifest`);
+    }
   });
 
   it('sanitizes untrusted metadata and validates every generated field against the published schema', async () => {

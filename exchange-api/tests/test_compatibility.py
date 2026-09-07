@@ -39,7 +39,12 @@ async def test_compatibility_confidence_range(client, sample_workflow):
     assert setup.status_code == 200, setup.text
 
     resp = await client.get("/api/v1/compatibility", params={"tool": "github-mcp"})
-    for entry in resp.json()["works_well_with"]:
+    assert resp.status_code == 200
+    partners = resp.json()["works_well_with"]
+    # The loop below is vacuous on an empty list; the seeded workflow pairs
+    # github-mcp with two other tools, so there must be partners to check.
+    assert partners, "seeded workflow must yield at least one partner"
+    for entry in partners:
         assert 0.0 <= entry["confidence"] <= 1.0
 
 
@@ -51,7 +56,9 @@ async def test_compatibility_limit(client, sample_workflow):
 
     resp = await client.get("/api/v1/compatibility", params={"tool": "github-mcp", "limit": 1})
     assert resp.status_code == 200
-    assert len(resp.json()["works_well_with"]) <= 1
+    # The seeded workflow gives github-mcp two partners, so a cap of 1 must
+    # return exactly one — `<= 1` would also accept an empty result.
+    assert len(resp.json()["works_well_with"]) == 1
 
 
 @pytest.mark.asyncio

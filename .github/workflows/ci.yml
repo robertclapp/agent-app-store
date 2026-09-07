@@ -130,30 +130,31 @@ jobs:
             fi
             sleep 1
           done
-          echo "container failed to become healthy; logs:"
+          # /health fails closed (503) on an empty registry or a database the
+          # container user cannot write, and the compose healthcheck never
+          # reports "healthy" on a 503 — so this is the only place that
+          # failure can be diagnosed. Fetch the body WITHOUT -f so the JSON
+          # (database: readonly|unavailable, tools_known) is visible.
+          echo "container failed to become healthy."
+          echo "--- /health body (status line last) ---"
+          curl -sS -w '\nHTTP %{http_code}\n' http://localhost:8000/health || true
+          echo "--- container user and /app/data ownership ---"
+          docker compose -f exchange-api/docker-compose.yml exec -T api sh -c 'id -u; ls -ln /app/data' || true
+          echo "--- logs ---"
           docker compose -f exchange-api/docker-compose.yml logs api
           exit 1
 
-      # Assert both health semantics and the canonical registry copy in the
-      # image. /health now fails closed when no tools were loaded.
-      - name: Verify registry loaded and database writable in container
+      # Reaching this step already proves /health returned 200, i.e. the
+      # registry loaded and the database is writable. Assert the contract
+      # explicitly anyway so a future change to /health's fail-closed
+      # semantics cannot silently weaken what this job guarantees.
+      - name: Verify /health contract in container
         run: |
           count=$(printf '%s' "$HEALTH_BODY" | python3 -c "import json,sys; print(json.load(sys.stdin)['tools_known'])")
           database=$(printf '%s' "$HEALTH_BODY" | python3 -c "import json,sys; print(json.load(sys.stdin)['database'])")
           echo "tools_known=$count database=$database"
-          if [ "$count" -lt 1 ]; then
-            echo "FAIL: container started with an empty tool registry."
-            docker compose -f exchange-api/docker-compose.yml logs api
-            exit 1
-          fi
-          # The container runs as a non-root user against a named volume; if
-          # ownership is ever wrong the API serves reads but fails every POST.
-          if [ "$database" != "writable" ]; then
-            echo "FAIL: database is not writable by the container user."
-            docker compose -f exchange-api/docker-compose.yml exec -T api sh -c 'id -u; ls -ln /app/data' || true
-            docker compose -f exchange-api/docker-compose.yml logs api
-            exit 1
-          fi
+          [ "$count" -ge 1 ] || { echo "FAIL: empty tool registry reported healthy"; exit 1; }
+          [ "$database" = "writable" ] || { echo "FAIL: non-writable database reported healthy"; exit 1; }
           echo "OK: registry loaded with $count tools; database $database."
 
       - name: Stop container

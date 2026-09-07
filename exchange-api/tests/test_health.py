@@ -20,7 +20,7 @@ async def test_health_check(client):
 
 
 @pytest.mark.asyncio
-async def test_health_fails_closed_when_database_is_readonly(client, tmp_path):
+async def test_health_fails_closed_when_database_is_readonly(client, tmp_path, monkeypatch):
     """
     A database the process cannot write must make /health report 503.
 
@@ -33,14 +33,11 @@ async def test_health_fails_closed_when_database_is_readonly(client, tmp_path):
 
     ro_path = tmp_path / "readonly.db"
     sqlite3.connect(ro_path).close()
-    original = db_mod.DATABASE_URL
     # mode=ro is enforced by SQLite itself, so this holds even when the test
     # process is root and file permission bits would not stop it.
-    db_mod.DATABASE_URL = f"file:{ro_path}?mode=ro"
-    try:
-        resp = await client.get("/health")
-    finally:
-        db_mod.DATABASE_URL = original
+    monkeypatch.setattr(db_mod, "DATABASE_URL", f"file:{ro_path}?mode=ro")
+
+    resp = await client.get("/health")
 
     assert resp.status_code == 503
     body = resp.json()
@@ -49,19 +46,22 @@ async def test_health_fails_closed_when_database_is_readonly(client, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_health_fails_closed_when_database_cannot_be_opened(client):
-    """An unopenable DATABASE_URL (missing directory) must also report 503."""
+async def test_health_fails_closed_when_database_cannot_be_opened(client, monkeypatch):
+    """
+    An unopenable DATABASE_URL must also report 503 — but as "unavailable",
+    not "readonly", so an operator is not sent to check the ownership of a
+    file that does not exist.
+    """
     import app.db.database as db_mod
 
-    original = db_mod.DATABASE_URL
-    db_mod.DATABASE_URL = "/nonexistent-dir-for-health-test/exchange.db"
-    try:
-        resp = await client.get("/health")
-    finally:
-        db_mod.DATABASE_URL = original
+    monkeypatch.setattr(db_mod, "DATABASE_URL", "/nonexistent-dir-for-health-test/exchange.db")
+
+    resp = await client.get("/health")
 
     assert resp.status_code == 503
-    assert resp.json()["database"] == "readonly"
+    body = resp.json()
+    assert body["status"] == "unhealthy"
+    assert body["database"] == "unavailable"
 
 
 @pytest.mark.asyncio

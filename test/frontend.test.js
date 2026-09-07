@@ -3,12 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const appSource = fs.readFileSync(path.join(repoRoot, 'app.js'), 'utf8');
 const indexSource = fs.readFileSync(path.join(repoRoot, 'index.html'), 'utf8');
-const hookSource = fs.readFileSync(path.join(repoRoot, '.claude/hooks/run-tests.sh'), 'utf8');
+const hookPath = path.join(repoRoot, '.claude/hooks/run-tests.sh');
+const hookSource = fs.readFileSync(hookPath, 'utf8');
 const readmeSource = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
 
 function loadApp() {
@@ -199,6 +201,36 @@ test('edit hook covers frontend tests and does not suppress pytest collection er
   assert.match(hookSource, /app\.js\|index\.html\|style\.css\|base\.css/);
   assert.match(hookSource, /node --test test\/frontend\.test\.js/);
   assert.doesNotMatch(hookSource, /status -eq 4/);
+});
+
+test('edit hook classifies missing modules: declared deps stay silent, project code fails loud', () => {
+  // is_env_gap() decides whether a "No module named X" failure is an
+  // environment gap (stay silent) or real breakage (exit 2). Getting this
+  // wrong either re-creates false FAILED alarms on a fresh checkout or
+  // swallows a genuinely broken import. Exercise the function in isolation
+  // with the exact output pytest produces.
+  const classify = module => {
+    const script = [
+      `REPO_ROOT=${JSON.stringify(repoRoot)}`,
+      `source <(sed -n '/^is_env_gap()/,/^}/p' ${JSON.stringify(hookPath)})`,
+      `if is_env_gap Python "ModuleNotFoundError: No module named '${module}'"; then echo silent; else echo loud; fi`,
+    ].join('\n');
+    const result = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+
+  // Declared dependencies, including ones whose import name differs from
+  // the distribution name.
+  assert.equal(classify('pytest'), 'silent');
+  assert.equal(classify('pytest_asyncio'), 'silent', 'underscore import vs dashed requirement');
+  assert.equal(classify('dotenv'), 'silent', 'python-dotenv installs as dotenv');
+  assert.equal(classify('yaml'), 'silent', 'pyyaml installs as yaml');
+
+  // Project code and undeclared names must never be swallowed.
+  assert.equal(classify('app'), 'loud');
+  assert.equal(classify('app.registry'), 'loud', 'a broken project import is real breakage');
+  assert.equal(classify('reqeusts'), 'loud', 'an undeclared typo must surface');
 });
 
 test('README requires an HTTP server rather than unsupported file URLs', () => {

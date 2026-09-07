@@ -18,18 +18,39 @@ def _is_uri(dsn: str) -> bool:
     return dsn.startswith("file:")
 
 
+def _db_parent(dsn: str) -> Path | None:
+    """
+    Directory that must exist for `dsn` to be opened, or None when there is
+    none (in-memory databases, or a bare filename in the working directory).
+    URI DSNs are unwrapped so `file:/srv/x/exchange.db?mode=ro` yields /srv/x.
+    """
+    path = dsn
+    if _is_uri(dsn):
+        path = dsn[len("file:"):].split("?", 1)[0]
+        if path.startswith("//"):
+            path = path[2:]
+    if path in (":memory:", "") or path.startswith(":memory:"):
+        return None
+    parent = Path(path).parent
+    return None if str(parent) in ("", ".") else parent
+
+
 async def get_db() -> aiosqlite.Connection:
     global _db
     if _db is None:
-        Path("data").mkdir(exist_ok=True)
+        parent = _db_parent(DATABASE_URL)
+        if parent is not None:
+            parent.mkdir(parents=True, exist_ok=True)
         _db = await aiosqlite.connect(DATABASE_URL, uri=_is_uri(DATABASE_URL))
         _db.row_factory = aiosqlite.Row
     return _db
 
 
-async def check_writable() -> bool:
+async def database_status() -> str:
     """
-    Prove the database accepts writes, without changing it.
+    Report whether the database accepts writes, without changing it.
+
+    Returns "writable", "readonly", or "unavailable".
 
     Opens a fresh connection (so it never collides with the shared
     connection's transaction state), performs a real write inside a
@@ -42,9 +63,11 @@ async def check_writable() -> bool:
     deployment reports unhealthy instead of accepting traffic and failing
     every POST.
 
-    A database that is merely busy (another writer holds the lock) is
-    writable, so lock contention is reported as healthy rather than
-    turning write load into a false outage.
+    "readonly" is reserved for that case so an operator is pointed at
+    file ownership; anything else that stops the probe (missing directory,
+    corrupt file) is "unavailable". A database that is merely busy
+    (another writer holds the lock) is writable, so lock contention is
+    reported healthy rather than turning write load into a false outage.
     """
     try:
         async with aiosqlite.connect(
@@ -53,12 +76,16 @@ async def check_writable() -> bool:
             await conn.execute("BEGIN IMMEDIATE")
             await conn.execute("CREATE TABLE __health_write_probe (probe INTEGER)")
             await conn.execute("ROLLBACK")
-        return True
+        return "writable"
     except sqlite3.OperationalError as exc:
         message = str(exc).lower()
-        return "locked" in message or "busy" in message
+        if "locked" in message or "busy" in message:
+            return "writable"
+        if "readonly" in message:
+            return "readonly"
+        return "unavailable"
     except Exception:
-        return False
+        return "unavailable"
 
 
 async def close_db():

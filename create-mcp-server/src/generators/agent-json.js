@@ -5,6 +5,7 @@
 
 import fs from 'fs-extra';
 import path from 'path';
+import { getAuthConfig } from './openapi.js';
 
 export async function generateAgentJson({ meta, outputDir }) {
   const packageName = normalizePackageName(meta.name);
@@ -26,7 +27,7 @@ export async function generateAgentJson({ meta, outputDir }) {
         endpoint: `npx ${packageName}`,
       },
     ],
-    auth: buildAuth(meta.authType, meta.api),
+    auth: buildAuth(meta),
     pricing: {
       model: 'free',
       free_tier: true,
@@ -61,29 +62,22 @@ export async function generateAgentJson({ meta, outputDir }) {
   return manifest;
 }
 
-function buildAuth(authType, api) {
-  switch (authType) {
+function buildAuth(meta) {
+  // One decision, shared with the generated client: which scheme, where the
+  // key goes, and what it is called. Re-deriving it here from the raw spec
+  // let the two drift — with several apiKey schemes the client honoured the
+  // one referenced by `security` while the manifest took the first declared,
+  // and the two applied different default names. meta.auth is what
+  // generateFromOpenAPI resolved; callers that only supply an api fall back
+  // to resolving it the same way.
+  const resolved = meta.auth && typeof meta.auth === 'object' ? meta.auth : getAuthConfig(meta.api);
+  const type = resolved.type && resolved.type !== 'none' ? resolved.type : (meta.authType || 'none');
+  switch (type) {
     case 'api_key': {
-      const scheme = findScheme(api, 'apiKey');
-      if (scheme?.in === 'query') {
-        return {
-          type: 'api_key',
-          key_query_param: scheme.name || 'api_key',
-        };
-      }
-      // Keep in sync with the generated client (openapi.js), which sends
-      // cookie keys in the Cookie header — a manifest that calls this a
-      // plain header would direct consumers to authenticate incorrectly.
-      if (scheme?.in === 'cookie') {
-        return {
-          type: 'api_key',
-          key_cookie: scheme.name || 'api_key',
-        };
-      }
-      return {
-        type: 'api_key',
-        key_header: scheme?.name || 'X-API-Key',
-      };
+      const name = normalizeText(resolved.name, 256) || 'X-API-Key';
+      if (resolved.in === 'query') return { type: 'api_key', key_query_param: name };
+      if (resolved.in === 'cookie') return { type: 'api_key', key_cookie: name };
+      return { type: 'api_key', key_header: name };
     }
     case 'bearer':
       return {
@@ -92,7 +86,7 @@ function buildAuth(authType, api) {
         key_prefix: 'Bearer',
       };
     case 'oauth2': {
-      const scheme = findScheme(api, 'oauth2');
+      const scheme = findScheme(meta.api, 'oauth2');
       const flow = oauthFlow(scheme);
       const authorizationUrl = safeUri(flow.authorizationUrl || scheme?.authorizationUrl);
       const tokenUrl = safeUri(flow.tokenUrl || scheme?.tokenUrl);

@@ -571,16 +571,16 @@ function setupFocusTrap(container) {
   container.addEventListener('keydown', container._focusTrapHandler);
 }
 
-/**
- * Copies the full JSON representation of a tool to the clipboard.
- * Temporarily updates the button text to indicate success.
- * @param {string} toolId - The unique ID of the tool whose JSON to copy.
- */
 // Shared across copyToolJSON calls so overlapping clicks restore the button's
 // real label rather than a mid-flash one. See flash() below.
 let copyFlashTimer = null;
 let copyFlashOriginal = null;
 
+/**
+ * Copies the full JSON representation of a tool to the clipboard.
+ * Temporarily updates the button text to indicate success.
+ * @param {string} toolId - The unique ID of the tool whose JSON to copy.
+ */
 function copyToolJSON(toolId) {
   const tool = tools.find(t => t.id === toolId);
   if (!tool) return;

@@ -57,6 +57,10 @@ export async function generateFromOpenAPI({ specSource, name, outputDir, lang })
     capabilities: inferCapabilities(api),
     baseUrl: getBaseUrl(api),
     authType: inferAuthType(api),
+    // The one resolved auth decision (scheme, location, key name) the client
+    // code was generated from. agent-json.js builds the manifest from this
+    // same object so the two artifacts cannot disagree.
+    auth: getAuthConfig(api),
   };
 }
 
@@ -577,7 +581,17 @@ function getBaseUrl(api) {
   return 'https://api.example.com';
 }
 
-function getAuthConfig(api) {
+/**
+ * Resolve the single auth scheme the generated client uses.
+ *
+ * Exported so agent-json.js derives the manifest's auth block from this SAME
+ * decision. Schemes referenced by the document's `security` requirements win
+ * over merely-declared ones, and defaults and sanitisation are applied here
+ * once — re-deriving any of it elsewhere is how the client and the manifest
+ * previously came to disagree about which key to send, and where.
+ */
+export function getAuthConfig(api) {
+  api = api && typeof api === 'object' ? api : {};
   const schemes = api.components?.securitySchemes || api.securityDefinitions || {};
   // The source document is untrusted: security may be non-array or hold
   // null/non-object entries, which must not abort generation with a TypeError.
@@ -586,12 +600,28 @@ function getAuthConfig(api) {
   const orderedNames = [...new Set([...referencedNames, ...Object.keys(schemes)])];
   for (const name of orderedNames) {
     const scheme = schemes[name];
-    if (!scheme) continue;
-    if (scheme.type === 'apiKey') return { type: 'api_key', in: scheme.in || 'header', name: scheme.name || 'X-API-Key' };
+    if (!scheme || typeof scheme !== 'object') continue;
+    if (scheme.type === 'apiKey') {
+      return { type: 'api_key', in: apiKeyLocation(scheme), name: schemeName(scheme, 'X-API-Key') };
+    }
     if (scheme.type === 'http' && String(scheme.scheme).toLowerCase() === 'bearer') return { type: 'bearer', in: 'header', name: 'Authorization' };
     if (scheme.type === 'oauth2') return { type: 'oauth2', in: 'header', name: 'Authorization' };
   }
   return { type: 'none', in: null, name: null };
+}
+
+const API_KEY_LOCATIONS = new Set(['header', 'query', 'cookie']);
+
+function apiKeyLocation(scheme) {
+  return API_KEY_LOCATIONS.has(scheme.in) ? scheme.in : 'header';
+}
+
+/** The spec is untrusted: a name may be missing, non-string, or carry line breaks. */
+function schemeName(scheme, fallback) {
+  const raw = typeof scheme.name === 'string'
+    ? scheme.name.replace(/[\r\n\u2028\u2029]+/g, ' ').trim().slice(0, 256)
+    : '';
+  return raw || fallback;
 }
 
 function inferAuthType(api) {
