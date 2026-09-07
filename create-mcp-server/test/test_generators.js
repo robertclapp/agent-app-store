@@ -1197,6 +1197,39 @@ describe('Agent JSON Generator', () => {
     }
   });
 
+  it('ignores junk securitySchemes entries when resolving the oauth2 flow', async () => {
+    // getAuthConfig skips a null scheme and still resolves oauth2; the
+    // manifest's findScheme walk then hits the same null and used to throw.
+    const { generateAgentJson } = await import('../src/generators/agent-json.js');
+    const outDir = path.join(OUTPUT_DIR, 'agent-json-junk-scheme');
+    await fs.ensureDir(outDir);
+
+    const manifest = await generateAgentJson({
+      meta: {
+        name: 'junk-scheme-mcp',
+        authType: 'oauth2',
+        api: {
+          info: { title: 'Junk Scheme API', version: '1.0.0' },
+          components: {
+            securitySchemes: {
+              bad: null,
+              worse: 'not-an-object',
+              oauth: {
+                type: 'oauth2',
+                flows: { clientCredentials: { tokenUrl: 'https://auth.test/token', scopes: { read: 'Read' } } },
+              },
+            },
+          },
+        },
+      },
+      outputDir: outDir,
+    });
+
+    assert.equal(manifest.auth.type, 'oauth2');
+    assert.equal(manifest.auth.oauth2.token_url, 'https://auth.test/token');
+    assert.deepEqual(manifest.auth.oauth2.scopes, { read: 'Read' });
+  });
+
   it('sanitizes untrusted metadata and validates every generated field against the published schema', async () => {
     const { generateAgentJson } = await import('../src/generators/agent-json.js');
     const schema = await fs.readJson(path.join(REPO_ROOT, 'schema/agent-json/0.1.0.json'));

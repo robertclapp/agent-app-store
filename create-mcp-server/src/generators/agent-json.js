@@ -161,5 +161,8 @@ function safeUri(value) {
 
 function findScheme(api, type) {
   const schemes = api?.components?.securitySchemes || api?.securityDefinitions || {};
-  return Object.values(schemes).find(s => s.type === type);
+  // The spec is untrusted: a scheme entry may be null or a non-object, and
+  // getAuthConfig already skips those — so this must too, or a single junk
+  // entry aborts manifest generation with a TypeError.
+  return Object.values(schemes).find(s => s && typeof s === 'object' && s.type === type);
 }

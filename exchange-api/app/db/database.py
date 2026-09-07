@@ -8,6 +8,7 @@ import sqlite3
 import aiosqlite
 import json
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 DATABASE_URL = os.getenv("DATABASE_URL", "data/exchange.db")
 _db: aiosqlite.Connection | None = None
@@ -21,14 +22,22 @@ def _is_uri(dsn: str) -> bool:
 def _db_parent(dsn: str) -> Path | None:
     """
     Directory that must exist for `dsn` to be opened, or None when there is
-    none (in-memory databases, or a bare filename in the working directory).
-    URI DSNs are unwrapped so `file:/srv/x/exchange.db?mode=ro` yields /srv/x.
+    none (in-memory databases, a bare filename in the working directory, or
+    a URI SQLite itself would refuse).
+
+    URI DSNs follow SQLite's rules (https://sqlite.org/uri.html): the
+    authority must be empty or `localhost`, and when an authority is present
+    the path is absolute. So `file:data/x.db` -> data, `file:/srv/x.db` ->
+    /srv, and `file://localhost/var/lib/x.db` -> /var/lib — not a relative
+    `localhost/var/lib`, which would create the wrong directory while SQLite
+    opened the real one.
     """
     path = dsn
     if _is_uri(dsn):
-        path = dsn[len("file:"):].split("?", 1)[0]
-        if path.startswith("//"):
-            path = path[2:]
+        parts = urlsplit(dsn)
+        if parts.netloc not in ("", "localhost"):
+            return None
+        path = unquote(parts.path)
     if path in (":memory:", "") or path.startswith(":memory:"):
         return None
     parent = Path(path).parent

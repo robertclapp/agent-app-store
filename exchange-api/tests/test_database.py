@@ -19,6 +19,13 @@ import app.db.database as db_mod
         ("/srv/exchange/exchange.db", Path("/srv/exchange")),
         ("file:/srv/exchange/exchange.db?mode=ro", Path("/srv/exchange")),
         ("file:data/exchange.db?mode=rwc", Path("data")),
+        # An authority of localhost (or empty) makes the path absolute per
+        # the SQLite URI spec — it must not become a relative "localhost/...".
+        ("file://localhost/var/lib/exchange.db?mode=rwc", Path("/var/lib")),
+        ("file:///var/lib/exchange.db", Path("/var/lib")),
+        ("file:/srv/with%20space/exchange.db", Path("/srv/with space")),
+        # SQLite rejects any other authority, so there is nothing to create.
+        ("file://otherhost/var/lib/exchange.db", None),
         ("exchange.db", None),
         (":memory:", None),
         ("file::memory:?cache=shared", None),
@@ -26,6 +33,25 @@ import app.db.database as db_mod
 )
 def test_db_parent_derives_directory_from_dsn(dsn, expected):
     assert db_mod._db_parent(dsn) == expected
+
+
+@pytest.mark.asyncio
+async def test_get_db_localhost_authority_uri_creates_the_real_parent(tmp_path, monkeypatch):
+    """file://localhost/<abs path> must create the absolute parent, not ./localhost/..."""
+    target = tmp_path / "authority" / "exchange.db"
+    monkeypatch.setattr(db_mod, "DATABASE_URL", f"file://localhost{target}?mode=rwc")
+    monkeypatch.setattr(db_mod, "_db", None)
+    monkeypatch.chdir(tmp_path)
+
+    conn = await db_mod.get_db()
+    try:
+        await conn.execute("CREATE TABLE t (x INTEGER)")
+        await conn.commit()
+    finally:
+        await db_mod.close_db()
+
+    assert target.is_file()
+    assert not (tmp_path / "localhost").exists(), "a relative localhost/ tree must not be created"
 
 
 @pytest.mark.asyncio
